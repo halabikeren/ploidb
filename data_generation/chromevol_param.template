@@ -1,0 +1,28 @@
+_dataFile = {counts_path}
+_treeFile = {tree_path}
+_resultsPathDir = {output_dir}
+
+_seed = 1
+_minChrNum = -1
+_numOfModels = 1
+_maxNumOfModels = 1
+_minCladeSize = 5
+_heterogeneousModel = false
+_maxParsimonyBound = true
+_parallelization = false
+_backwardPhase = false
+
+_optimizationMethod = Brent
+_tolParamOptimization = 0.1
+_baseNumOptimizationMethod = Ranges
+_optimizePointsNum = {_optimize_points_num}
+_optimizeIterNum = {_optimize_iter_num}
+
+_simulateData = {_simulate}
+_runStochasticMapping = {_run_stochastic_mapping}
+
+_gainFunc = CONST
+_lossFunc = CONST
+_duplFunc = CONST
+_demiDuplFunc = IGNORE
+_baseNumRFunc = IGNORE
