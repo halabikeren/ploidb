@@ -20,9 +20,4 @@ _optimizeIterNum = {_optimize_iter_num}
 
 _simulateData = {_simulate}
 _runStochasticMapping = {_run_stochastic_mapping}
-
-_gainFunc = CONST
-_lossFunc = CONST
-_duplFunc = CONST
-_demiDuplFunc = IGNORE
-_baseNumRFunc = IGNORE
+_NumOfSimulations = {__num_of_simulations}
