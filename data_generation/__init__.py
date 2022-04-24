@@ -1,1 +1,1 @@
-from chromevol import *
+from .chromevol import *
