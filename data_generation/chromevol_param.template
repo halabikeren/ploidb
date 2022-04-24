@@ -4,6 +4,7 @@ _resultsPathDir = {output_dir}
 
 _seed = 1
 _minChrNum = -1
+_maxChrNum = -10
 _numOfModels = 1
 _maxNumOfModels = 1
 _minCladeSize = 5
@@ -19,5 +20,7 @@ _optimizePointsNum = {_optimize_points_num}
 _optimizeIterNum = {_optimize_iter_num}
 
 _simulateData = {_simulate}
-_runStochasticMapping = {_run_stochastic_mapping}
-_NumOfSimulations = {__num_of_simulations}
+_runStochasticMapping = {run_stochastic_mapping}
+_NumOfSimulations = {num_of_simulations}
+
+_branchMul = {branch_scaling_factor}
