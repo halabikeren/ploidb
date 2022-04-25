@@ -29,7 +29,7 @@ included_parameter_template_with_func = "\n_{param_name}_1 = {param_index};{para
 included_parameter_template = "\n_{param_name}_1 = {param_index};{param_init_value}\n"
 excluded_parameter_template = "\n_{func_name} = IGNORE\n"
 states_frequencies_template = "\n_fixedFrequenciesFilePath = {states_frequencies_path}"
-
+tree_scaling_factor_template = "\n_branchMul = {branch_scaling_factor}"
 
 @dataclass
 class ChromevolInput:
@@ -38,7 +38,7 @@ class ChromevolInput:
     output_dir: str
     input_path: str
     parameters: Dict[str, float] # map of parameter name to its initial value
-    branch_scaling_factor: float = 1.
+    tree_scaling_factor: Optional[float] = None
     optimize: bool = True
     _optimize_points_num: str = "10,3,1"
     _optimize_iter_num: str = "0,2,5"
@@ -57,7 +57,7 @@ class ChromevolOutput:
     log_likelihood: float
     aicc_score: float
     model_parameters: Dict[str, float]
-    tree_scaling_factor: float = 1.
+    tree_scaling_factor: Optional[float] = None
     states_frequencies_path: Optional[str] = None
 
 
@@ -82,6 +82,8 @@ class ChromevolExecutor:
                 input_string += excluded_parameter_template.format(func_name=param.func_name)
         if "states_frequencies_path" in input_args and input_args["states_frequencies_path"] is not None:
             input_string += states_frequencies_template.format(states_frequencies_path=input_args["states_frequencies_path"])
+        if "tree_scaling_factor" in input_args and input_args["tree_scaling_factor"] is not None:
+            input_string += tree_scaling_factor_template.format(tree_scaling_factor=input_args["tree_scaling_factor"])
         input_string = input_string.replace("False", "false").replace("True",
                                                                       "true")  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
         with open(chromevol_input.input_path, "w") as outfile:
@@ -142,6 +144,15 @@ class ChromevolExecutor:
         for match in state_to_freq_regex.finditer(result_str):
             states_frequencies.append(float(match.group(2)))
         return states_frequencies
+
+    @staticmethod
+    def _get_tree_scaling_factor(result_str: str) -> float:
+        scaling_factor_regex = re.compile("Tree scaling factor is\:\s(\d*\.?\d*)")
+        try:
+            return float(scaling_factor_regex.search(result_str).group(1))
+        except Exception as e:
+            logger.error(f"failed to extract AICc score from {result_str} due to error {e}")
+            return np.nan
 
     @staticmethod
     def _parse_result(path: str) -> Tuple[float, float, int, Dict[str, float], float, str]:
