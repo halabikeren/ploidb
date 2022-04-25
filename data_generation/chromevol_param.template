@@ -22,5 +22,3 @@ _optimizeIterNum = {_optimize_iter_num}
 _simulateData = {_simulate}
 _runStochasticMapping = {run_stochastic_mapping}
 _NumOfSimulations = {num_of_simulations}
-
-_branchMul = {branch_scaling_factor}
