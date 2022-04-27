@@ -16,8 +16,8 @@ _backwardPhase = false
 _optimizationMethod = Brent
 _tolParamOptimization = 0.1
 _baseNumOptimizationMethod = Ranges
-_optimizePointsNum = {_optimize_points_num}
-_optimizeIterNum = {_optimize_iter_num}
+_optimizePointsNum = {optimize_points_num}
+_optimizeIterNum = {optimize_iter_num}
 
 _simulateData = {_simulate}
 _runStochasticMapping = {run_stochastic_mapping}

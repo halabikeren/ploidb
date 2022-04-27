@@ -4,7 +4,7 @@ import os
 import re
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Union
 from io import StringIO
 import numpy as np
 import pandas as pd
@@ -39,13 +39,12 @@ class ChromevolInput:
     input_path: str
     parameters: Dict[str, float] # map of parameter name to its initial value
     tree_scaling_factor: Optional[float] = None
-    optimize: bool = True
-    _optimize_points_num: str = "10,3,1"
-    _optimize_iter_num: str = "0,2,5"
-    _simulate: bool = False
+    optimize_points_num: Union[str, int] = "10,3,1"
+    optimize_iter_num: Union[str, int] = "0,2,5"
     run_stochastic_mapping: bool = False
     num_of_simulations: int = 1000
     states_frequencies_path: Optional[str] = None
+    _simulate: bool = False
 
 
 @dataclass
@@ -186,6 +185,7 @@ class ChromevolExecutor:
 
     @staticmethod
     def _parse_stochastic_mappings(input_dir: str, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
         for path in os.listdir(input_dir):
             if path.endswith(".csv"):
                 os.rename(f"{input_dir}/{path}", f"{output_dir}/{path}")

@@ -29,7 +29,6 @@ class Pipeline:
         model_to_io = dict()
         base_input_ags = {"tree_path": tree_path,
                           "counts_path": counts_path,
-                          "optimize": True,
                           "num_of_simulations": 0,
                           "run_stochastic_mapping": False}
         for model in models:
@@ -80,7 +79,8 @@ class Pipeline:
                      "tree_path": tree_path,
                      "counts_path": counts_path,
                      "output_dir": work_dir,
-                     "optimize": False,
+                     "optimize_points_num": 1,
+                     "optimize_iter_num": 0,
                      "run_stochastic_mapping": False,
                      "num_of_simulations": simulations_num}
         with open(model_parameters_path, "r") as infile:
@@ -107,13 +107,13 @@ class Pipeline:
     def _create_stochastic_mapping_input(counts_path: str, tree_path: str, model_parameters_path: str, work_dir: str, mappings_num: int) -> Tuple[str, str]:
         sm_input_path = f"{work_dir}sm_params.json"
         chromevol_input_path = f"{work_dir}sm.params"
-        sm_output_dir = work_dir
+        sm_output_dir = f"{work_dir}stochastic_mappings/"
         input_ags = {"input_path": chromevol_input_path,
                      "tree_path": tree_path,
                      "counts_path": counts_path,
                      "output_dir": work_dir,
-                     "optimize": True,
-
+                     "optimize_points_num": 1,
+                     "optimize_iter_num": 0,
                      "run_stochastic_mapping": True,
                      "num_of_simulations": mappings_num}
         with open(model_parameters_path, "r") as infile:
@@ -123,7 +123,7 @@ class Pipeline:
             json.dump(obj=input_ags, fp=outfile)
         return sm_input_path, sm_output_dir
 
-    def _create_stochastic_mappings(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 100) -> str:
+    def _get_stochastic_mappings(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 100) -> Tuple[List[pd.DataFrame], pd.DataFrame]:
         sm_work_dir = f"{self.work_dir}stochastic_mapping/"
         os.makedirs(sm_work_dir, exist_ok=True)
         sm_input_path, sm_output_dir = self._create_stochastic_mapping_input(counts_path=counts_path,
@@ -136,7 +136,12 @@ class Pipeline:
                 [os.getenv("CONDA_ACT_CMD"), f"cd {sm_work_dir}",
                  f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}"]])
         logger.info(f"computed {mappings_num} mappings successfully")
-        return sm_output_dir
+        mappings = self._process_mappings(stochastic_mappings_dir=sm_output_dir,
+                                          mappings_num=mappings_num)
+        expected_events_num = pd.read_csv(f"{sm_output_dir}/stMapping_root_to_leaf_exp.csv")
+        expected_events_num["ploidity_events_num"] = expected_events_num[
+            ["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(numeric_only=True, axis=1)
+        return mappings, expected_events_num
 
     @staticmethod
     def _get_true_values(mappings: List[pd.DataFrame], classification_field: str) -> np.array:
@@ -192,24 +197,33 @@ class Pipeline:
                 mapping["is_diploid"] = mapping["ploidity_events_num"] < 1
                 mapping["is_polyploid"] = mapping["ploidity_events_num"] >= 1
                 mappings.append(mapping)
-        if num_considered_mappings < mappings_num * missing_mappings_threshold:
-            logger.info(f"# failed mappings = {num_failed_mappings}")
-            logger.info(f"# mappings that reached TOMAX events = {num_tomax_mappings}")
-            logger.error(f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt")
-            exit(1)
         logger.info(f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num)}% ({num_failed_mappings} / {mappings_num})")
         logger.info(
             f"% mappings with trajectories that reached max chromosome number = {np.round(num_tomax_mappings / mappings_num)}% ({num_tomax_mappings} / {mappings_num})")
+        if num_considered_mappings < mappings_num * missing_mappings_threshold:
+            logger.error(f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt")
+            exit(1)
         return mappings
 
-    def get_stochastic_mappings_based_thresholds(self, counts_path: str, tree_path: str, model_parameters_path: str, expected_events_num: pd.DataFrame, mappings_num: int = 100) -> Tuple[float, float]:
-        stochastic_mappings_dir = self._create_stochastic_mappings(counts_path=counts_path, tree_path=tree_path, model_parameters_path=model_parameters_path, mappings_num=mappings_num)
-        mappings = self._process_mappings(stochastic_mappings_dir=stochastic_mappings_dir, mappings_num=mappings_num)
+    def _get_stochastic_mappings_based_thresholds(self, mappings: List[pd.DataFrame], expected_events_num: pd.DataFrame) -> Tuple[float, float]:
         diploidity_threshold = self._get_optimal_threshold(mappings=mappings, classification_field="is_diploid", expected_events_num=expected_events_num)
         polyploidity_threshold = self._get_optimal_threshold(mappings=mappings, classification_field="is_polyploid", expected_events_num=expected_events_num)
+        logger.info(
+            f"optimal diploidity threshold = {diploidity_threshold}, optimal polyploidity threshold = {polyploidity_threshold}")
         return diploidity_threshold, polyploidity_threshold
 
-    def get_ploidity_classification(self, counts_path: str, tree_path: str, model_parameters_path: str, simulations_num: int = 1000) -> pd.DataFrame:
+    @staticmethod
+    def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], threshold: float = 0.9) -> int: # 0 - diploid, 1 - polyploid
+        num_mappings,  num_polyploid_supporting_mappings = len(mappings), 0
+        for mapping in mappings:
+            if mapping.loc[mapping.NODE == taxon, "is_polyploid"].values[0]:
+                num_polyploid_supporting_mappings += 1
+        polyploidity_frequency_across_mappings = num_polyploid_supporting_mappings/num_mappings
+        if polyploidity_frequency_across_mappings >= threshold:
+            return 1
+        return 0
+
+    def get_ploidity_classification(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, duplication_frequency_threshold: float = 0.9) -> pd.DataFrame:
         ploidity_classification = pd.DataFrame(columns=["taxon", "classification"])
         ploidity_classification["taxon"] = [record.id for record in list(SeqIO.parse(counts_path, format="fasta"))]
         with open(model_parameters_path, "r") as infile:
@@ -218,14 +232,19 @@ class Pipeline:
             logger.info(f"the best selected model has no duplication parameters so all the tip taxa are necessarily diploids")
             ploidity_classification["classification"] = "diploid" # if no duplication parameters are included in the best model, than all taxa must be diploids
         else:
-            expected_events_num = self._get_expected_events_num(counts_path=counts_path,
-                                                                tree_path=tree_path,
-                                                                model_parameters_path=model_parameters_path,
-                                                                simulations_num=simulations_num)
-            diploid_threshold, polyploid_threshold = self.get_stochastic_mappings_based_thresholds(counts_path=counts_path, tree_path=tree_path, expected_events_num=expected_events_num, model_parameters_path=model_parameters_path, mappings_num=simulations_num)
-            logger.info(f"optimal diploidity threshold = {diploid_threshold}, optimal polyploidity threshold = {polyploid_threshold}")
-            ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: 0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploid_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploid_threshold else np.nan))
-            logger.info(f"out of {ploidity_classification.shape[0]} taxa, {ploidity_classification.loc[ploidity_classification.classification == 1].shape[0]} were classified as polyploids, {ploidity_classification.loc[ploidity_classification.classification == 0].shape[0]} were classified as diploids and {ploidity_classification.loc[ploidity_classification.classification.isna()].shape[0]} have no reliable classification")
+            mappings, expected_events_num = self._get_stochastic_mappings(counts_path=counts_path, tree_path=tree_path,
+                                                                    model_parameters_path=model_parameters_path,
+                                                                    mappings_num=mappings_num)
+            if classification_based_on_expectations:
+                logger.info(
+                    f"classifying taxa to ploidity status based on thresholds derived from expectations of duplication events")
+                diploidity_threshold, polyploidity_threshold = self._get_stochastic_mappings_based_thresholds(mappings=mappings, expected_events_num=expected_events_num)
+                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: 0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploidity_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploidity_threshold else np.nan))
+            else:
+                logger.info(f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings")
+                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, threshold=duplication_frequency_threshold))
+        logger.info(
+            f"out of {ploidity_classification.shape[0]} taxa, {ploidity_classification.loc[ploidity_classification.classification == 1].shape[0]} were classified as polyploids, {ploidity_classification.loc[ploidity_classification.classification == 0].shape[0]} were classified as diploids and {ploidity_classification.loc[ploidity_classification.classification.isna()].shape[0]} have no reliable classification")
         return ploidity_classification
 
 if __name__ == '__main__':
@@ -244,15 +263,15 @@ if __name__ == '__main__':
 
     # reproduce ploidb
     test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/new_pipeline/"
-    test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol/chromevol_out/Sida.counts_edit"
-    test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol/chromevol_out/infer/infer_tree_1/tree_1"
+    test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol_prune/chromevol_out/Sida.counts_edit"
+    test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol_prune/chromevol_out/infer/infer_tree_1/tree_1"
 
     os.makedirs(test_work_dir, exist_ok=True)
     pipeline = Pipeline(work_dir=test_work_dir)
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(counts_path=test_counts_path, tree_path=test_tree_path)
     logger.info(f"searching for optimal classification thresholds")
-    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path, tree_path=test_tree_path, model_parameters_path=best_model_results_path, simulations_num=100)
+    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path, tree_path=test_tree_path, model_parameters_path=best_model_results_path, mappings_num=1000, classification_based_on_expectations = False)
 
 
 
