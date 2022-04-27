@@ -102,7 +102,7 @@ class PBSService:
     def _wait_for_jobs(jobs_ids: List[str]):
         jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
         while not jobs_complete:
-            sleep(2 * 60)
+            sleep(60)
             jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
 
     @staticmethod
@@ -121,5 +121,5 @@ class PBSService:
             jobs_ids = PBSService._submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs)
             PBSService._wait_for_jobs(jobs_ids=jobs_ids)
 
-        # remove work dir
-        shutil.rmtree(work_dir, ignore_errors=True)
+        # # remove work dir
+        # shutil.rmtree(work_dir, ignore_errors=True)
