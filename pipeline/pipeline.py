@@ -213,17 +213,19 @@ class Pipeline:
         return diploidity_threshold, polyploidity_threshold
 
     @staticmethod
-    def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], threshold: float = 0.9) -> int: # 0 - diploid, 1 - polyploid
+    def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> int: # 0 - diploid, 1 - polyploid, np.nan - unable to determine
         num_mappings,  num_polyploid_supporting_mappings = len(mappings), 0
         for mapping in mappings:
             if mapping.loc[mapping.NODE == taxon, "is_polyploid"].values[0]:
                 num_polyploid_supporting_mappings += 1
         polyploidity_frequency_across_mappings = num_polyploid_supporting_mappings/num_mappings
-        if polyploidity_frequency_across_mappings >= threshold:
+        if polyploidity_frequency_across_mappings >= polyploidity_threshold:
             return 1
-        return 0
+        elif polyploidity_frequency_across_mappings <= diploidity_threshold:
+            return 0
+        return np.nan
 
-    def get_ploidity_classification(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, duplication_frequency_threshold: float = 0.9) -> pd.DataFrame:
+    def get_ploidity_classification(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> pd.DataFrame:
         ploidity_classification = pd.DataFrame(columns=["taxon", "classification"])
         ploidity_classification["taxon"] = [record.id for record in list(SeqIO.parse(counts_path, format="fasta"))]
         with open(model_parameters_path, "r") as infile:
@@ -242,7 +244,7 @@ class Pipeline:
                 ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: 0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploidity_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploidity_threshold else np.nan))
             else:
                 logger.info(f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings")
-                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, threshold=duplication_frequency_threshold))
+                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, polyploidity_threshold=polyploidity_threshold, diploidity_threshold=diploidity_threshold))
         logger.info(
             f"out of {ploidity_classification.shape[0]} taxa, {ploidity_classification.loc[ploidity_classification.classification == 1].shape[0]} were classified as polyploids, {ploidity_classification.loc[ploidity_classification.classification == 0].shape[0]} were classified as diploids and {ploidity_classification.loc[ploidity_classification.classification.isna()].shape[0]} have no reliable classification")
         return ploidity_classification
