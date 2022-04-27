@@ -29,7 +29,7 @@ included_parameter_template_with_func = "\n_{param_name}_1 = {param_index};{para
 included_parameter_template = "\n_{param_name}_1 = {param_index};{param_init_value}\n"
 excluded_parameter_template = "\n_{func_name} = IGNORE\n"
 states_frequencies_template = "\n_fixedFrequenciesFilePath = {states_frequencies_path}"
-tree_scaling_factor_template = "\n_branchMul = {branch_scaling_factor}"
+tree_scaling_factor_template = "\n_branchMul = {tree_scaling_factor}"
 
 @dataclass
 class ChromevolInput:
@@ -101,7 +101,7 @@ class ChromevolExecutor:
         parameters_regex = re.compile("Final model parameters are\:(.*?)AICc", re.MULTILINE | re.DOTALL)
         try:
             parameters_str = parameters_regex.search(result_str).group(1)
-            parameter_regex = re.compile("Chromosome\.(.*?)0_1\s=\s(\d*\.*\d*)")
+            parameter_regex = re.compile("Chromosome\.(.*?)0*_1\s=\s(\d*\.*\d*)")
             parameters = dict()
             for match in parameter_regex.finditer(parameters_str):
                 parameters[match.group(1)] = float(match.group(2))
