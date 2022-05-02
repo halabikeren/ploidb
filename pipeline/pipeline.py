@@ -7,6 +7,7 @@ import pandas as pd
 import sys
 
 from Bio import SeqIO
+from ete3 import Tree
 
 from sklearn.metrics import matthews_corrcoef
 
@@ -131,7 +132,7 @@ class Pipeline:
                                                                              model_parameters_path=model_parameters_path,
                                                                              work_dir=sm_work_dir,
                                                                              mappings_num=mappings_num)
-        if len(os.listdir(sm_output_dir)) < mappings_num:
+        if not os.path.exists(sm_output_dir) or len(os.listdir(sm_output_dir)) < mappings_num:
             PBSService.execute_job_array(work_dir=f"{sm_work_dir}jobs/", output_dir=f"{sm_work_dir}jobs_output/", jobs_commands=[
                 [os.getenv("CONDA_ACT_CMD"), f"cd {sm_work_dir}",
                  f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}"]])
@@ -214,6 +215,8 @@ class Pipeline:
 
     @staticmethod
     def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> int: # 0 - diploid, 1 - polyploid, np.nan - unable to determine
+        if taxon not in mappings[0].NODE.tolist():
+            return np.nan
         num_mappings,  num_polyploid_supporting_mappings = len(mappings), 0
         for mapping in mappings:
             if mapping.loc[mapping.NODE == taxon, "is_polyploid"].values[0]:
@@ -225,14 +228,18 @@ class Pipeline:
             return 0
         return np.nan
 
-    def get_ploidity_classification(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> pd.DataFrame:
-        ploidity_classification = pd.DataFrame(columns=["taxon", "classification"])
-        ploidity_classification["taxon"] = [record.id for record in list(SeqIO.parse(counts_path, format="fasta"))]
+    def get_ploidity_classification(self, counts_path: str, tree_path: str, full_tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> pd.DataFrame:
+        ploidy_classification = pd.DataFrame(columns=["Taxon", "Ploidy inference"])
+        taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
+        tree = Tree(full_tree_path)
+        taxon_name_to_count = {record.id: int(str(record.seq)) for record in taxa_records}
+        ploidy_classification["Taxon"] = tree.get_leaf_names()
+        ploidy_classification["Chromosome count"] = ploidy_classification["Taxon"].apply(lambda name: taxon_name_to_count.get(name, "x"))
         with open(model_parameters_path, "r") as infile:
             parameters = json.load(fp=infile)["model_parameters"]
         if not ("dupl" in parameters or "demiPloidyR" in parameters or "baseNum" in parameters):
             logger.info(f"the best selected model has no duplication parameters so all the tip taxa are necessarily diploids")
-            ploidity_classification["classification"] = "diploid" # if no duplication parameters are included in the best model, than all taxa must be diploids
+            ploidy_classification["Ploidy inference"] = "diploid" # if no duplication parameters are included in the best model, than all taxa must be diploids
         else:
             mappings, expected_events_num = self._get_stochastic_mappings(counts_path=counts_path, tree_path=tree_path,
                                                                     model_parameters_path=model_parameters_path,
@@ -241,13 +248,34 @@ class Pipeline:
                 logger.info(
                     f"classifying taxa to ploidity status based on thresholds derived from expectations of duplication events")
                 diploidity_threshold, polyploidity_threshold = self._get_stochastic_mappings_based_thresholds(mappings=mappings, expected_events_num=expected_events_num)
-                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: 0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploidity_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploidity_threshold else np.nan))
+                ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: np.nan if taxon not in expected_events_num.NODE.tolist() else (0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploidity_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploidity_threshold else np.nan)))
             else:
                 logger.info(f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings")
-                ploidity_classification["classification"] = ploidity_classification["taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, polyploidity_threshold=polyploidity_threshold, diploidity_threshold=diploidity_threshold))
+                ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, polyploidity_threshold=polyploidity_threshold, diploidity_threshold=diploidity_threshold))
         logger.info(
-            f"out of {ploidity_classification.shape[0]} taxa, {ploidity_classification.loc[ploidity_classification.classification == 1].shape[0]} were classified as polyploids, {ploidity_classification.loc[ploidity_classification.classification == 0].shape[0]} were classified as diploids and {ploidity_classification.loc[ploidity_classification.classification.isna()].shape[0]} have no reliable classification")
-        return ploidity_classification
+            f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification")
+        return ploidy_classification
+
+    @staticmethod
+    def color_tree_by_classification(input_tree_path: str, classification: pd.DataFrame, output_tree_path: str):
+        class_to_color = {np.nan: "black", 1: "red", 0: "blue"}
+        tree = Tree(input_tree_path)
+        for leaf in tree.get_leaves():
+            try:
+                ploidy_status = classification.loc[classification.Taxon == leaf.name, "Ploidy inference"].dropna().values[0]
+            except Exception as e:
+                logger.info(f"no ploidy status is available for {leaf.name}")
+                ploidy_status = np.nan
+            leaf.add_feature(pr_name="color_tag", pr_value=f"[&&NHX:C={class_to_color[ploidy_status]}]")
+        tree.write(outfile=output_tree_path, features=["color_tag"])
+
+    @staticmethod
+    def prune_tree_with_counts(counts_path: str, input_tree_path: str, output_tree_path: str):
+        counts = list(SeqIO.parse(counts_path, format="fasta"))
+        records_with_counts = [record.id for record in counts]
+        tree = Tree(input_tree_path)
+        tree.prune(records_with_counts)
+        tree.write(outfile=output_tree_path)
 
 if __name__ == '__main__':
 
@@ -264,16 +292,19 @@ if __name__ == '__main__':
     # test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/tree.newick"
 
     # reproduce ploidb
-    test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/new_pipeline/"
-    test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol_prune/chromevol_out/Sida.counts_edit"
-    test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce/Sida/Sida_Chromevol_prune/chromevol_out/infer/infer_tree_1/tree_1"
+    test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/"
+    test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/counts.fasta"
+    test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/tree.nwk"
 
     os.makedirs(test_work_dir, exist_ok=True)
     pipeline = Pipeline(work_dir=test_work_dir)
+    relevant_tree_path = test_tree_path.replace(".nwk", "_only_with_counts.nwk")
+    pipeline.prune_tree_with_counts(counts_path=test_counts_path, input_tree_path=test_tree_path, output_tree_path=relevant_tree_path)
     logger.info(f"selecting the best chromevol model")
-    best_model_results_path = pipeline.get_best_model(counts_path=test_counts_path, tree_path=test_tree_path)
+    best_model_results_path = pipeline.get_best_model(counts_path=test_counts_path, tree_path=relevant_tree_path)
     logger.info(f"searching for optimal classification thresholds")
-    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path, tree_path=test_tree_path, model_parameters_path=best_model_results_path, mappings_num=1000, classification_based_on_expectations = False)
-
+    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path, tree_path=relevant_tree_path, full_tree_path=test_tree_path, model_parameters_path=best_model_results_path, mappings_num=1000, classification_based_on_expectations = False)
+    test_ploidity_classification.to_csv(f"{test_work_dir}ploidy.csv")
+    pipeline.color_tree_by_classification(input_tree_path=test_tree_path, classification=test_ploidity_classification, output_tree_path=f"{test_work_dir}/classified_tree.nwk")
 
 
