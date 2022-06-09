@@ -138,13 +138,12 @@ def fill_missing_data_from_ncbi(data: pd.DataFrame, search_by_col: str) -> pd.Da
     data.set_index(orig_index, inplace=True)
     return data
 
-def add_taxonomic_data(input_path: str, input_col: str, output_path: str):
-    input_df = pd.read_csv(input_path)
-    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.getenv(itis_db_link), db_dir=os.path.dirname(output_path))
+def add_taxonomic_data(input_df: pd.DataFrame, input_col: str, ) -> pd.DataFrame:
+    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.getenv("ITIS_DB_LINK"), db_dir=os.path.dirname(os.getcwd()))
     missing_data = input_df.loc[(input_df.genus.isna()) | (input_df.family.isna())]
     complementary_data = fill_missing_data_from_ncbi(data=missing_data, search_by_col=input_col)
 
     input_df.update(complementary_data)
     input_df.reset_index(inplace=True)
     input_df.drop(f"{input_col}_capitalized", axis=1, inplace=True)
-    input_df.to_csv(output_path, index=False)
+    return input_df
