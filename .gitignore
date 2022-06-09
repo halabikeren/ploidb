@@ -128,9 +128,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# env vars
-.env
-
 # User-specific stuff:
 .idea/workspace.xml
 .idea/tasks.xml
@@ -151,7 +148,7 @@ dmypy.json
 .idea/libraries
 
 # *.iml
-# modules.xml
+modules.xml
 
 # specific data files
 data_processing/WFO_Backbone.zip
@@ -160,3 +157,8 @@ data_processing/eml.xml
 .idea/dataSources.xml
 data_processing/references.txt
 data_processing/networs_extraction/.DS_Store
+/.idea/misc.xml
+/.idea/ploidb.iml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/remote-mappings.xml
