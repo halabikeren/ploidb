@@ -1,12 +1,13 @@
 import json
 import os
-from typing import Dict, Tuple, List
+import re
+from typing import Dict, Tuple, List, Optional
 
 import numpy as np
 import pandas as pd
 import sys
 
-from Bio import SeqIO
+from Bio import SeqIO, Phylo
 from ete3 import Tree
 
 from sklearn.metrics import matthews_corrcoef
@@ -228,12 +229,21 @@ class Pipeline:
             return 0
         return np.nan
 
-    def get_ploidity_classification(self, counts_path: str, tree_path: str, full_tree_path: str, model_parameters_path: str, mappings_num: int = 1000, classification_based_on_expectations: bool = False, polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> pd.DataFrame:
-        ploidy_classification = pd.DataFrame(columns=["Taxon", "Ploidy inference"])
+    def get_ploidity_classification(self,
+                                    counts_path: str,
+                                    tree_path: str,
+                                    full_tree_path: str,
+                                    model_parameters_path: str,
+                                    mappings_num: int = 1000,
+                                    classification_based_on_expectations: bool = False,
+                                    polyploidity_threshold: float = 0.9,
+                                    diploidity_threshold: float = 0.1,
+                                    taxonomic_classification_data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        ploidy_classification = pd.DataFrame(columns=["Taxon", "Genus", "Family", "Ploidy inference"])
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
         tree = Tree(full_tree_path)
         taxon_name_to_count = {record.id: int(str(record.seq)) for record in taxa_records}
-        ploidy_classification["Taxon"] = tree.get_leaf_names()
+        ploidy_classification["Taxon"] = pd.Series(tree.get_leaf_names()).str.lower()
         ploidy_classification["Chromosome count"] = ploidy_classification["Taxon"].apply(lambda name: taxon_name_to_count.get(name, "x"))
         with open(model_parameters_path, "r") as infile:
             parameters = json.load(fp=infile)["model_parameters"]
@@ -254,20 +264,13 @@ class Pipeline:
                 ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, polyploidity_threshold=polyploidity_threshold, diploidity_threshold=diploidity_threshold))
         logger.info(
             f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification")
+        if taxonomic_classification_data is not None:
+            ploidy_classification.set_index("Taxon", inplace=True)
+            taxon_to_genus, taxon_to_family = taxonomic_classification_data.set_index("original_name")["genus"].to_dict(), taxonomic_classification_data.set_index("query")["family"].to_dict()
+            ploidy_classification["Genus"].fillna(value=taxon_to_genus, inplace=True)
+            ploidy_classification["Family"].fillna(value=taxon_to_family, inplace=True)
+            ploidy_classification.reset_index(inplace=True)
         return ploidy_classification
-
-    @staticmethod
-    def color_tree_by_classification(input_tree_path: str, classification: pd.DataFrame, output_tree_path: str):
-        class_to_color = {np.nan: "black", 1: "red", 0: "blue"}
-        tree = Tree(input_tree_path)
-        for leaf in tree.get_leaves():
-            try:
-                ploidy_status = classification.loc[classification.Taxon == leaf.name, "Ploidy inference"].dropna().values[0]
-            except Exception as e:
-                logger.info(f"no ploidy status is available for {leaf.name}")
-                ploidy_status = np.nan
-            leaf.add_feature(pr_name="color_tag", pr_value=f"[&&NHX:C={class_to_color[ploidy_status]}]")
-        tree.write(outfile=output_tree_path, features=["color_tag"])
 
     @staticmethod
     def prune_tree_with_counts(counts_path: str, input_tree_path: str, output_tree_path: str):
@@ -276,6 +279,99 @@ class Pipeline:
         tree = Tree(input_tree_path)
         tree.prune(records_with_counts)
         tree.write(outfile=output_tree_path)
+
+    @staticmethod
+    def parse_classification_data(ploidy_classification_data: Optional[pd.DataFrame] = None) -> Tuple[
+        Dict[str, str], Dict[str, str], Dict[str, str], str]:
+        labels_str = '<labels>\n\
+                                    <label type="text">\n\
+                                      <data tag="chrom"/>\n\
+                                    </label>\n\
+                                 </labels>'
+        taxon_to_chromosome_count, taxon_to_ploidy_colortag, taxon_to_ploidy_class_name = dict(), dict(), dict()
+        if ploidy_classification_data is not None:
+            taxon_to_chromosome_count = ploidy_classification_data.set_index("Taxon")["Chromosome count"].to_dict()
+            taxon_to_ploidy_class = ploidy_classification_data.set_index("Taxon")["Ploidy inference"].to_dict()
+            taxon_to_ploidy_colortag = {taxon: "#ff0000" if taxon_to_ploidy_class[taxon] == 1 else ("#0000ff" if taxon_to_ploidy_class[taxon] == 0 else "0x000000") for taxon in taxon_to_ploidy_class}
+            taxon_to_ploidy_class_name = {taxon: "Polyploid" if taxon_to_ploidy_class[taxon] == 1 else ("Diploid" if taxon_to_ploidy_class[taxon] == 0 else "") for taxon in taxon_to_ploidy_class}
+            labels_str = '<labels>\n\
+                                <label type="text">\n\
+                                  <data tag="chrom"/>\n\
+                                </label>\n\
+                                <label type="text">\n\
+                                  <data tag="ploidy"/>\n\
+                                </label>\n\
+                                <label type="color">\n\
+                                  <data tag="colortag"/>\n\
+                                </label>\n\
+                             </labels>'
+        return taxon_to_chromosome_count, taxon_to_ploidy_colortag, taxon_to_ploidy_class_name, labels_str
+
+    @staticmethod
+    def parse_phyloxml_tree(input_path: str,
+                            output_path: str,
+                            taxon_to_chromosome_count: Dict[str, str],
+                            taxon_to_ploidy_colortag: Dict[str, str],
+                            taxon_to_ploidy_class_name: Dict[str, str],
+                            labels_str: str):
+
+        with open(input_path, "r") as phylo_in:
+            phylo_tree_lines = phylo_in.readlines()
+
+        with open(output_path, "w") as phylo_out:
+            phylo_out.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            for line in phylo_tree_lines:
+                if "<name>" in line:
+                    taxon_name_with_chromosome_count = re.split('>|<|\n', line)[2]
+                    taxon_name = taxon_name_with_chromosome_count.split('-')[0]
+                    phylo_out.write(line.replace(taxon_name_with_chromosome_count, taxon_name))
+                    chrom_tag = "<chrom> - </chrom>\n"
+                    if taxon_name in taxon_to_chromosome_count.keys():
+                        chrom_tag = f"<chrom>{taxon_to_chromosome_count[taxon_name].replace('x', ' - ')}</chrom>\n"
+                    phylo_out.write(chrom_tag)
+                    if taxon_name in taxon_to_ploidy_colortag:
+                        phylo_out.write(f"<colortag>{taxon_to_ploidy_colortag[taxon_name]}</colortag>\n")
+                    if taxon_name in taxon_to_ploidy_class_name:
+                        phylo_out.write(f"<ploidy>{taxon_to_ploidy_class_name[taxon_name]}</ploidy>\n")
+                elif "<branch_length>" in line:
+                    phylo_out.write(line)
+                    if taxon_name:
+                        phylo_out.write(f"<name>{taxon_name}<name>")
+                        taxon_name = None
+                elif "<phylogeny" in line:
+                    phylo_out.write(line)
+                    phylo_out.write(labels_str)
+                else:
+                    phylo_out.write(line)
+                taxon_name = None
+    @staticmethod
+    def write_labeled_phyloxml_tree(tree_path: str, output_path: str, ploidy_classification_data: Optional[pd.DataFrame] = None):
+
+        input_path = tree_path.replace(".nwk", "phyloxml")
+        Phylo.convert(tree_path, 'newick', input_path, 'phyloxml')
+        taxon_to_chromosome_count, taxon_to_ploidy_colortag, taxon_to_ploidy_class_name, labels_str = Pipeline.parse_classification_data(ploidy_classification_data=ploidy_classification_data)
+        Pipeline.parse_phyloxml_tree(input_path=input_path,
+                            output_path=output_path,
+                            taxon_to_chromosome_count=taxon_to_chromosome_count,
+                            taxon_to_ploidy_colortag=taxon_to_ploidy_colortag,
+                            taxon_to_ploidy_class_name=taxon_to_ploidy_class_name,
+                            labels_str=labels_str)
+
+    @staticmethod
+    def write_labeled_newick_tree(tree_path: str, output_path: str, ploidy_classification_data: Optional[pd.DataFrame] = None):
+        class_to_color = {np.nan: "black", 1: "red", 0: "blue"}
+        tree = Tree(tree_path)
+        for leaf in tree.get_leaves():
+            if ploidy_classification_data is not None:
+                try:
+                    ploidy_status = ploidy_classification_data.loc[ploidy_classification_data.Taxon == leaf.name, "Ploidy inference"].dropna().values[0]
+                except Exception as e:
+                    logger.info(f"no ploidy status is available for {leaf.name}")
+                    ploidy_status = np.nan
+            else:
+                ploidy_status = np.nan
+            leaf.add_feature(pr_name="color_tag", pr_value=f"[&&NHX:C={class_to_color[ploidy_status]}]")
+        tree.write(outfile=output_path, features=["color_tag"])
 
 if __name__ == '__main__':
 
@@ -286,25 +382,35 @@ if __name__ == '__main__':
         force=True,  # run over root logger settings to enable simultaneous writing to both stdout and file handler
     )
 
-    # # toy example
-    # test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/pipeline/"
-    # test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/counts.fasta"
-    # test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/tree.newick"
-
     # reproduce ploidb
     test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/"
     test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/counts.fasta"
     test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/tree.nwk"
+    taxonomic_classification_path = "/groups/itay_mayrose/halabikeren/PloiDB/name_resolution/processed_resolved_names.csv"
 
     os.makedirs(test_work_dir, exist_ok=True)
     pipeline = Pipeline(work_dir=test_work_dir)
     relevant_tree_path = test_tree_path.replace(".nwk", "_only_with_counts.nwk")
     pipeline.prune_tree_with_counts(counts_path=test_counts_path, input_tree_path=test_tree_path, output_tree_path=relevant_tree_path)
+
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(counts_path=test_counts_path, tree_path=relevant_tree_path)
+
     logger.info(f"searching for optimal classification thresholds")
-    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path, tree_path=relevant_tree_path, full_tree_path=test_tree_path, model_parameters_path=best_model_results_path, mappings_num=1000, classification_based_on_expectations = False)
+    taxonomic_classification = pd.read_csv(taxonomic_classification_path)
+    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path,
+                                                                        tree_path=relevant_tree_path,
+                                                                        full_tree_path=test_tree_path,
+                                                                        model_parameters_path=best_model_results_path,
+                                                                        mappings_num=1000, classification_based_on_expectations = False, taxonomic_classification_data = taxonomic_classification)
     test_ploidity_classification.to_csv(f"{test_work_dir}ploidy.csv")
-    pipeline.color_tree_by_classification(input_tree_path=test_tree_path, classification=test_ploidity_classification, output_tree_path=f"{test_work_dir}/classified_tree.nwk")
+    pipeline.write_labeled_phyloxml_tree(tree_path=test_tree_path,
+                                         ploidy_classification_data=test_ploidity_classification,
+                                         output_path=f"{test_work_dir}/classified_tree.phyloxml")
+
+    pipeline.write_labeled_newick_tree(tree_path=test_tree_path,
+                                         ploidy_classification_data=test_ploidity_classification,
+                                         output_path=f"{test_work_dir}/classified_tree.newick")
+
 
 
