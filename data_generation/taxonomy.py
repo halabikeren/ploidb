@@ -1,15 +1,14 @@
 import os
-import sys
-import click
+from typing import Optional
+
 import sqlite3
 
 import numpy as np
 import pandas as pd
 from pandarallel import pandarallel
-pandarallel.initialize(progress_bar=True, nb_workers=10, use_memory_fs=False)
+pandarallel.initialize(progress_bar=True, nb_workers=5, use_memory_fs=False)
 
 from Bio import Entrez
-Entrez.email = os.getenv("ENTREZ_EMAIL")
 
 import logging
 logger = logging.getLogger(__name__)
@@ -59,6 +58,8 @@ def get_rank_name(item: pd.Series, rank_name: str, ranks_data: pd.DataFrame, tax
     return item.complete_name
 
 def get_ncbi_tax_id(tax_name: str) -> int:
+    logger.info(f"performing Entrez requests via {os.getenv('ENTREZ_EMAIL')}")
+    Entrez.email = os.getenv("ENTREZ_EMAIL")
     tax_id = np.nan
     try:
         res = Entrez.read(
@@ -106,6 +107,8 @@ def fill_missing_data_from_itis(input_df: pd.DataFrame, input_col: str, db_link:
 
 
 def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int, str]]:
+    logger.info(f"performing Entrez requests via {os.getenv('ENTREZ_EMAIL')}")
+    Entrez.email = os.getenv("ENTREZ_EMAIL")
     tax_id_to_genus, tax_id_to_family = dict(), dict()
     try:
         res = list(Entrez.parse(Entrez.efetch(db="taxonomy", id=",".join([str(i) for i in tax_ids]), retmode="xml",
@@ -138,8 +141,10 @@ def fill_missing_data_from_ncbi(data: pd.DataFrame, search_by_col: str) -> pd.Da
     data.set_index(orig_index, inplace=True)
     return data
 
-def add_taxonomic_data(input_df: pd.DataFrame, input_col: str, ) -> pd.DataFrame:
-    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.getenv("ITIS_DB_LINK"), db_dir=os.path.dirname(os.getcwd()))
+def add_taxonomic_data(input_df: pd.DataFrame, input_col: str, itis_db_dir: Optional[str]) -> pd.DataFrame:
+    if itis_db_dir is None:
+        itis_db_dir = os.path.dirname(os.getcwd())
+    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.getenv("ITIS_DB_LINK"), db_dir=itis_db_dir)
     missing_data = input_df.loc[(input_df.genus.isna()) | (input_df.family.isna())]
     complementary_data = fill_missing_data_from_ncbi(data=missing_data, search_by_col=input_col)
 
