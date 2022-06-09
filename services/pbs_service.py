@@ -4,7 +4,6 @@ import re
 from typing import List
 import getpass
 import subprocess
-import shutil
 from time import sleep
 
 import numpy as np
