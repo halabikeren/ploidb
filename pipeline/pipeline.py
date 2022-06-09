@@ -275,7 +275,7 @@ class Pipeline:
     @staticmethod
     def prune_tree_with_counts(counts_path: str, input_tree_path: str, output_tree_path: str):
         counts = list(SeqIO.parse(counts_path, format="fasta"))
-        records_with_counts = [record.id for record in counts]
+        records_with_counts = [record.description for record in counts]
         tree = Tree(input_tree_path)
         tree.prune(records_with_counts)
         tree.write(outfile=output_tree_path)
@@ -372,45 +372,3 @@ class Pipeline:
                 ploidy_status = np.nan
             leaf.add_feature(pr_name="color_tag", pr_value=f"[&&NHX:C={class_to_color[ploidy_status]}]")
         tree.write(outfile=output_path, features=["color_tag"])
-
-if __name__ == '__main__':
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s module: %(module)s function: %(funcName)s line %(lineno)d: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), ],
-        force=True,  # run over root logger settings to enable simultaneous writing to both stdout and file handler
-    )
-
-    # reproduce ploidb
-    test_work_dir = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/"
-    test_counts_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/counts.fasta"
-    test_tree_path = "/groups/itay_mayrose/halabikeren/PloiDB/chromevol/test/reproduce_ploidb/josef/tree.nwk"
-    taxonomic_classification_path = "/groups/itay_mayrose/halabikeren/PloiDB/name_resolution/processed_resolved_names.csv"
-
-    os.makedirs(test_work_dir, exist_ok=True)
-    pipeline = Pipeline(work_dir=test_work_dir)
-    relevant_tree_path = test_tree_path.replace(".nwk", "_only_with_counts.nwk")
-    pipeline.prune_tree_with_counts(counts_path=test_counts_path, input_tree_path=test_tree_path, output_tree_path=relevant_tree_path)
-
-    logger.info(f"selecting the best chromevol model")
-    best_model_results_path = pipeline.get_best_model(counts_path=test_counts_path, tree_path=relevant_tree_path)
-
-    logger.info(f"searching for optimal classification thresholds")
-    taxonomic_classification = pd.read_csv(taxonomic_classification_path)
-    test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=test_counts_path,
-                                                                        tree_path=relevant_tree_path,
-                                                                        full_tree_path=test_tree_path,
-                                                                        model_parameters_path=best_model_results_path,
-                                                                        mappings_num=1000, classification_based_on_expectations = False, taxonomic_classification_data = taxonomic_classification)
-    test_ploidity_classification.to_csv(f"{test_work_dir}ploidy.csv")
-    pipeline.write_labeled_phyloxml_tree(tree_path=test_tree_path,
-                                         ploidy_classification_data=test_ploidity_classification,
-                                         output_path=f"{test_work_dir}/classified_tree.phyloxml")
-
-    pipeline.write_labeled_newick_tree(tree_path=test_tree_path,
-                                         ploidy_classification_data=test_ploidity_classification,
-                                         output_path=f"{test_work_dir}/classified_tree.newick")
-
-
-
