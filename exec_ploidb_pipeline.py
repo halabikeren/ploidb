@@ -45,7 +45,14 @@ logger = logging.getLogger(__name__)
     required=False,
     default=None
 )
-def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_path: str, taxonomic_classification_path: Optional[str]):
+@click.option(
+    "--parallel",
+    help="indicator weather to run the pipeline in parallel (1) with one idle parent job or sequentially",
+    type=bool,
+    required=False,
+    default=False
+)
+def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_path: str, taxonomic_classification_path: Optional[str], parallel: bool = False):
 
     logging.basicConfig(
         level=logging.INFO,
@@ -63,17 +70,18 @@ def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_
                                     output_tree_path=relevant_tree_path)
 
     logger.info(f"selecting the best chromevol model")
-    best_model_results_path = pipeline.get_best_model(counts_path=counts_path, tree_path=relevant_tree_path)
+    best_model_results_path = pipeline.get_best_model(counts_path=counts_path, tree_path=relevant_tree_path, parallel=parallel)
 
     logger.info(f"searching for optimal classification thresholds")
-    taxonomic_classification = pd.read_csv(taxonomic_classification_path)
+    taxonomic_classification = pd.read_csv(taxonomic_classification_path) if taxonomic_classification_path is not None else None
     test_ploidity_classification = pipeline.get_ploidity_classification(counts_path=counts_path,
                                                                         tree_path=relevant_tree_path,
                                                                         full_tree_path=tree_path,
                                                                         model_parameters_path=best_model_results_path,
                                                                         mappings_num=1000,
                                                                         classification_based_on_expectations=False,
-                                                                        taxonomic_classification_data=taxonomic_classification)
+                                                                        taxonomic_classification_data=taxonomic_classification,
+                                                                        parallel=parallel)
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv")
     pipeline.write_labeled_phyloxml_tree(tree_path=tree_path,
                                          ploidy_classification_data=test_ploidity_classification,

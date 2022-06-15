@@ -62,13 +62,18 @@ class Pipeline:
         logger.info(f"the selected model is {winning_model} with an AICc score of {winning_model_aicc_score}")
         return winning_model
 
-    def get_best_model(self, counts_path: str, tree_path: str) -> str:
+    def get_best_model(self, counts_path: str, tree_path: str, parallel: bool = False) -> str:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
         model_to_io = self._create_models_input_files(tree_path=tree_path, counts_path=counts_path, work_dir=model_selection_work_dir)
         jobs_commands = [[os.getenv("CONDA_ACT_CMD"), f"cd {model_selection_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}"] for model_name in model_to_io if not os.path.exists(model_to_io[model_name]['output_path'])]
         if len(jobs_commands) > 0:
-            PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
+            if parallel:
+                PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
+            else:
+                for job_commands_set in jobs_commands:
+                    logger.info(f"submitting job commands set {jobs_commands.index(job_commands_set)}")
+                    res = os.system(";".join(job_commands_set))
         logger.info(f"completed execution of chromevol across {len(jobs_commands)} different models")
         return self._select_best_model(model_to_io)
 
@@ -125,7 +130,7 @@ class Pipeline:
             json.dump(obj=input_ags, fp=outfile)
         return sm_input_path, sm_output_dir
 
-    def _get_stochastic_mappings(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 100) -> Tuple[List[pd.DataFrame], pd.DataFrame]:
+    def _get_stochastic_mappings(self, counts_path: str, tree_path: str, model_parameters_path: str, mappings_num: int = 100, parallel: bool = False) -> Tuple[List[pd.DataFrame], pd.DataFrame]:
         sm_work_dir = f"{self.work_dir}stochastic_mapping/"
         os.makedirs(sm_work_dir, exist_ok=True)
         sm_input_path, sm_output_dir = self._create_stochastic_mapping_input(counts_path=counts_path,
@@ -134,9 +139,12 @@ class Pipeline:
                                                                              work_dir=sm_work_dir,
                                                                              mappings_num=mappings_num)
         if not os.path.exists(sm_output_dir) or len(os.listdir(sm_output_dir)) < mappings_num:
-            PBSService.execute_job_array(work_dir=f"{sm_work_dir}jobs/", output_dir=f"{sm_work_dir}jobs_output/", jobs_commands=[
-                [os.getenv("CONDA_ACT_CMD"), f"cd {sm_work_dir}",
-                 f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}"]])
+            commands = [os.getenv("CONDA_ACT_CMD"), f"cd {sm_work_dir}",
+                     f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}"]
+            if parallel:
+                PBSService.execute_job_array(work_dir=f"{sm_work_dir}jobs/", output_dir=f"{sm_work_dir}jobs_output/", jobs_commands=[commands])
+            else:
+                res = os.system(";".join(commands))
         logger.info(f"computed {mappings_num} mappings successfully")
         mappings = self._process_mappings(stochastic_mappings_dir=sm_output_dir,
                                           mappings_num=mappings_num)
@@ -216,11 +224,11 @@ class Pipeline:
 
     @staticmethod
     def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> int: # 0 - diploid, 1 - polyploid, np.nan - unable to determine
-        if taxon not in mappings[0].NODE.tolist():
+        if taxon.lower() not in mappings[0].NODE.str.lower().tolist():
             return np.nan
         num_mappings,  num_polyploid_supporting_mappings = len(mappings), 0
         for mapping in mappings:
-            if mapping.loc[mapping.NODE == taxon, "is_polyploid"].values[0]:
+            if mapping.loc[mapping.NODE.str.lower() == taxon.lower(), "is_polyploid"].values[0]:
                 num_polyploid_supporting_mappings += 1
         polyploidity_frequency_across_mappings = num_polyploid_supporting_mappings/num_mappings
         if polyploidity_frequency_across_mappings >= polyploidity_threshold:
@@ -238,22 +246,24 @@ class Pipeline:
                                     classification_based_on_expectations: bool = False,
                                     polyploidity_threshold: float = 0.9,
                                     diploidity_threshold: float = 0.1,
-                                    taxonomic_classification_data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+                                    taxonomic_classification_data: Optional[pd.DataFrame] = None,
+                                    parallel: bool = False) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(columns=["Taxon", "Genus", "Family", "Ploidy inference"])
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
         tree = Tree(full_tree_path)
-        taxon_name_to_count = {record.id: int(str(record.seq)) for record in taxa_records}
+        taxon_name_to_count = {record.description.lower(): int(str(record.seq)) for record in taxa_records}
         ploidy_classification["Taxon"] = pd.Series(tree.get_leaf_names()).str.lower()
         ploidy_classification["Chromosome count"] = ploidy_classification["Taxon"].apply(lambda name: taxon_name_to_count.get(name, "x"))
         with open(model_parameters_path, "r") as infile:
             parameters = json.load(fp=infile)["model_parameters"]
         if not ("dupl" in parameters or "demiPloidyR" in parameters or "baseNum" in parameters):
             logger.info(f"the best selected model has no duplication parameters so all the tip taxa are necessarily diploids")
-            ploidy_classification["Ploidy inference"] = "diploid" # if no duplication parameters are included in the best model, than all taxa must be diploids
+            ploidy_classification["Ploidy inference"] = 0 # if no duplication parameters are included in the best model, than all taxa must be diploids
         else:
             mappings, expected_events_num = self._get_stochastic_mappings(counts_path=counts_path, tree_path=tree_path,
                                                                     model_parameters_path=model_parameters_path,
-                                                                    mappings_num=mappings_num)
+                                                                    mappings_num=mappings_num,
+                                                                    parallel=parallel)
             if classification_based_on_expectations:
                 logger.info(
                     f"classifying taxa to ploidity status based on thresholds derived from expectations of duplication events")
@@ -327,7 +337,7 @@ class Pipeline:
                     phylo_out.write(line.replace(taxon_name_with_chromosome_count, taxon_name))
                     chrom_tag = "<chrom> - </chrom>\n"
                     if taxon_name in taxon_to_chromosome_count.keys():
-                        chrom_tag = f"<chrom>{taxon_to_chromosome_count[taxon_name].replace('x', ' - ')}</chrom>\n"
+                        chrom_tag = f"<chrom>{str(taxon_to_chromosome_count[taxon_name]).replace('x', ' - ')}</chrom>\n"
                     phylo_out.write(chrom_tag)
                     if taxon_name in taxon_to_ploidy_colortag:
                         phylo_out.write(f"<colortag>{taxon_to_ploidy_colortag[taxon_name]}</colortag>\n")
@@ -347,7 +357,7 @@ class Pipeline:
     @staticmethod
     def write_labeled_phyloxml_tree(tree_path: str, output_path: str, ploidy_classification_data: Optional[pd.DataFrame] = None):
 
-        input_path = tree_path.replace(".nwk", "phyloxml")
+        input_path = f"{tree_path.split('.')[0]}.phyloxml"
         Phylo.convert(tree_path, 'newick', input_path, 'phyloxml')
         taxon_to_chromosome_count, taxon_to_ploidy_colortag, taxon_to_ploidy_class_name, labels_str = Pipeline.parse_classification_data(ploidy_classification_data=ploidy_classification_data)
         Pipeline.parse_phyloxml_tree(input_path=input_path,
@@ -359,12 +369,12 @@ class Pipeline:
 
     @staticmethod
     def write_labeled_newick_tree(tree_path: str, output_path: str, ploidy_classification_data: Optional[pd.DataFrame] = None):
-        class_to_color = {np.nan: "black", 1: "red", 0: "blue"}
+        class_to_color = {np.nan: "black", 1: "red", 0: "blue", "polyploid": "red", "diploid": "blue"}
         tree = Tree(tree_path)
         for leaf in tree.get_leaves():
             if ploidy_classification_data is not None:
                 try:
-                    ploidy_status = ploidy_classification_data.loc[ploidy_classification_data.Taxon == leaf.name, "Ploidy inference"].dropna().values[0]
+                    ploidy_status = ploidy_classification_data.loc[ploidy_classification_data.Taxon.str.lower() == leaf.name.lower(), "Ploidy inference"].dropna().values[0]
                 except Exception as e:
                     logger.info(f"no ploidy status is available for {leaf.name}")
                     ploidy_status = np.nan
