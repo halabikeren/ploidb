@@ -73,7 +73,7 @@ class PBSService:
                 commands=[
                              os.environ.get("CONDA_ACT_CMD", "")
                          ] + jobs_commands[i],
-                ram_gb_size=8
+                ram_gb_size=4
             )
             jobs_paths.append(job_path)
             job_output_paths.append(job_output_path)
