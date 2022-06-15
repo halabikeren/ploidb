@@ -13,6 +13,9 @@ from Bio import Entrez
 import logging
 logger = logging.getLogger(__name__)
 
+from dotenv import load_dotenv
+load_dotenv(f"{os.path.dirname(os.path.dirname(os.path.realpath(__file__)))}/.env")
+
 def get_itis_db(db_link: str, db_dir: str):
     if not os.path.exists(f"{db_dir}/itisSqlite.zip"):
         res = os.system(f"cd {db_dir}; wget {db_link}; unzip itisSqlite.zip")
@@ -58,12 +61,11 @@ def get_rank_name(item: pd.Series, rank_name: str, ranks_data: pd.DataFrame, tax
     return item.complete_name
 
 def get_ncbi_tax_id(tax_name: str) -> int:
-    logger.info(f"performing Entrez requests via {os.getenv('ENTREZ_EMAIL')}")
-    Entrez.email = os.getenv("ENTREZ_EMAIL")
+    Entrez.email = os.environ.get("ENTREZ_EMAIL")
     tax_id = np.nan
     try:
         res = Entrez.read(
-            Entrez.esearch(db="taxonomy", term=tax_name, retmode="xml", api_key=os.getenv("NCBI_API_KEY")))[
+            Entrez.esearch(db="taxonomy", term=tax_name, retmode="xml", api_key=os.environ.get("NCBI_API_KEY")))[
             "IdList"]
         if len(res) > 0:
             tax_id = int(res[0])
@@ -83,7 +85,7 @@ def fill_missing_data_from_itis(input_df: pd.DataFrame, input_col: str, db_link:
 
     input_df[f"{input_col}_capitalized"] = input_df[input_col].str.capitalize()
     taxonomic_data = get_taxonomic_data(db_connection=connection, kingdom_id=plant_kingdom_id,
-                                        names=input_df[input_col].to_list())
+                                        names=input_df[f"{input_col}_capitalized"].to_list())
     taxonomic_data["rank_name"] = taxonomic_data["rank_id"].apply(lambda rank_id: rank_id_to_name[rank_id])
     taxonomic_data["genus_name"] = taxonomic_data.apply(
         lambda row: get_rank_name(item=row, rank_name="genus", ranks_data=ranks_data,
@@ -107,12 +109,11 @@ def fill_missing_data_from_itis(input_df: pd.DataFrame, input_col: str, db_link:
 
 
 def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int, str]]:
-    logger.info(f"performing Entrez requests via {os.getenv('ENTREZ_EMAIL')}")
-    Entrez.email = os.getenv("ENTREZ_EMAIL")
+    Entrez.email = os.environ.get("ENTREZ_EMAIL")
     tax_id_to_genus, tax_id_to_family = dict(), dict()
     try:
         res = list(Entrez.parse(Entrez.efetch(db="taxonomy", id=",".join([str(i) for i in tax_ids]), retmode="xml",
-                                              api_key= os.getenv("NCBI_API_KEY"))))
+                                              api_key= os.environ.get("NCBI_API_KEY"))))
         for record in res:
             tax_id = int(record["TaxId"])
             for rank_data in record["LineageEx"]:
@@ -125,9 +126,9 @@ def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int
     return tax_id_to_genus, tax_id_to_family
 
 def fill_missing_data_from_ncbi(data: pd.DataFrame, search_by_col: str) -> pd.DataFrame:
-    orig_index = data.index.names
+    data.reset_index(inplace=True)
     data["ncbi_tax_id"] = data[search_by_col].parallel_apply(get_ncbi_tax_id)
-    tax_ids = data.ncbi_taxon_id.unique().tolist()
+    tax_ids = data.ncbi_tax_id.unique().tolist()
     batch_size = 1000
     tax_ids_batches = [tax_ids[i:i + batch_size] for i in range(0, len(tax_ids), batch_size)]
     tax_id_to_genus, tax_id_to_family = dict(), dict()
@@ -138,16 +139,17 @@ def fill_missing_data_from_ncbi(data: pd.DataFrame, search_by_col: str) -> pd.Da
     data.set_index("ncbi_tax_id", inplace=True)
     data["genus"].fillna(value=tax_id_to_genus, inplace=True)
     data["family"].fillna(value=tax_id_to_family, inplace=True)
-    data.set_index(orig_index, inplace=True)
     return data
 
 def add_taxonomic_data(input_df: pd.DataFrame, input_col: str, itis_db_dir: Optional[str]) -> pd.DataFrame:
     if itis_db_dir is None:
         itis_db_dir = os.path.dirname(os.getcwd())
-    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.getenv("ITIS_DB_LINK"), db_dir=itis_db_dir)
+    fill_missing_data_from_itis(input_df=input_df, input_col=input_col, db_link=os.environ.get("ITIS_DB_LINK"), db_dir=itis_db_dir)
     missing_data = input_df.loc[(input_df.genus.isna()) | (input_df.family.isna())]
     complementary_data = fill_missing_data_from_ncbi(data=missing_data, search_by_col=input_col)
+    complementary_data.to_csv(f"{os.getcwd()}/complementary_tax_data.csv")
 
+    complementary_data.set_index(input_df.index.name, inplace=True)
     input_df.update(complementary_data)
     input_df.reset_index(inplace=True)
     input_df.drop(f"{input_col}_capitalized", axis=1, inplace=True)
