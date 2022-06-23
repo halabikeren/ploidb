@@ -24,6 +24,7 @@ base_num = ModelParameter(name="baseNum", func_name=None, init_value=3)
 base_num_r = ModelParameter(name="baseNumR", func_name="baseNumRFunc", init_value=4.)
 model_parameters = [gain, loss, dupl, demi_dupl, base_num, base_num_r]
 models = [[gain, loss], [gain, loss, dupl], [gain, loss, base_num, base_num_r], [gain, loss, dupl, demi_dupl], [gain, loss, dupl, base_num, base_num_r], [gain, loss, dupl, base_num, base_num_r, demi_dupl]]
+most_complex_model = "_".join(param.name for param in [gain, loss, dupl, base_num, base_num_r, demi_dupl])
 
 included_parameter_template_with_func = "\n_{param_name}_1 = {param_index};{param_init_value}\n_{func_name} = CONST\n"
 included_parameter_template = "\n_{param_name}_1 = {param_index};{param_init_value}\n"

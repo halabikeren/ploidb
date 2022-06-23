@@ -13,7 +13,7 @@ from ete3 import Tree
 from sklearn.metrics import matthews_corrcoef
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from data_generation.chromevol import  model_parameters, models, ChromevolOutput
+from data_generation.chromevol import  model_parameters, models, most_complex_model, ChromevolOutput
 from services.pbs_service import PBSService
 
 import logging
@@ -66,10 +66,16 @@ class Pipeline:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
         model_to_io = self._create_models_input_files(tree_path=tree_path, counts_path=counts_path, work_dir=model_selection_work_dir)
-        jobs_commands = [[os.getenv("CONDA_ACT_CMD"), f"cd {model_selection_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}"] for model_name in model_to_io if not os.path.exists(model_to_io[model_name]['output_path'])]
+        jobs_commands = [[os.getenv("CONDA_ACT_CMD"), f"cd {model_selection_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}"] for model_name in model_to_io if not os.path.exists(model_to_io[model_name]['output_path']) and model_name != most_complex_model]
+        most_complex_model_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {model_selection_work_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[most_complex_model]['input_path']}"
         if len(jobs_commands) > 0:
             if parallel:
-                PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
+                # PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
+                jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=f"{model_selection_work_dir}jobs/",
+                                                      output_dir=f"{model_selection_work_dir}jobs_output/")
+                jobs_ids = PBSService.submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=15)
+                res = os.system(most_complex_model_cmd)
+                PBSService.wait_for_jobs(jobs_ids=jobs_ids)
             else:
                 for job_commands_set in jobs_commands:
                     logger.info(f"submitting job commands set {jobs_commands.index(job_commands_set)}")
@@ -276,7 +282,7 @@ class Pipeline:
             f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification")
         if taxonomic_classification_data is not None:
             ploidy_classification.set_index("Taxon", inplace=True)
-            taxon_to_genus, taxon_to_family = taxonomic_classification_data.set_index("original_name")["genus"].to_dict(), taxonomic_classification_data.set_index("query")["family"].to_dict()
+            taxon_to_genus, taxon_to_family = taxonomic_classification_data.set_index("corrected_resolved_name")["genus"].to_dict(), taxonomic_classification_data.set_index("corrected_resolved_name")["family"].to_dict()
             ploidy_classification["Genus"].fillna(value=taxon_to_genus, inplace=True)
             ploidy_classification["Family"].fillna(value=taxon_to_family, inplace=True)
             ploidy_classification.reset_index(inplace=True)

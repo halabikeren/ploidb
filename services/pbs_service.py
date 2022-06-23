@@ -60,7 +60,7 @@ class PBSService:
         return curr_jobs_num
 
     @staticmethod
-    def _generate_jobs(jobs_commands: List[List[str]], work_dir: str, output_dir: str) -> List[str]:
+    def generate_jobs(jobs_commands: List[List[str]], work_dir: str, output_dir: str) -> List[str]:
         jobs_paths, job_output_paths = [], []
         for i in range(len(jobs_commands)):
             job_path = f"{work_dir}/{i}.sh"
@@ -81,7 +81,7 @@ class PBSService:
         return jobs_paths
 
     @staticmethod
-    def _submit_jobs(jobs_paths: List[str], max_parallel_jobs: int = 30):
+    def submit_jobs(jobs_paths: List[str], max_parallel_jobs: int = 30):
         job_index = 0
         jobs_ids = []
         while job_index < len(jobs_paths):
@@ -99,7 +99,7 @@ class PBSService:
         return jobs_ids
 
     @staticmethod
-    def _wait_for_jobs(jobs_ids: List[str]):
+    def wait_for_jobs(jobs_ids: List[str]):
         jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
         while not jobs_complete:
             sleep(60)
@@ -117,9 +117,9 @@ class PBSService:
         logger.info(f"# input paths to execute commands on = {len(jobs_commands)}")
 
         if len(jobs_commands) > 0:
-            jobs_paths = PBSService._generate_jobs(jobs_commands=jobs_commands, work_dir=work_dir, output_dir=output_dir)
-            jobs_ids = PBSService._submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs)
-            PBSService._wait_for_jobs(jobs_ids=jobs_ids)
+            jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=work_dir, output_dir=output_dir)
+            jobs_ids = PBSService.submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs)
+            PBSService.wait_for_jobs(jobs_ids=jobs_ids)
 
         # # remove work dir
         # shutil.rmtree(work_dir, ignore_errors=True)
