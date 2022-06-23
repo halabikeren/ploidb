@@ -110,7 +110,8 @@ class Pipeline:
         os.makedirs(simulations_work_dir, exist_ok=True)
         simulations_input_path, simulations_output_path = self._create_simulations_input(counts_path=counts_path, tree_path=tree_path, model_parameters_path=model_parameters_path, work_dir=simulations_work_dir, simulations_num=simulations_num)
         if not os.path.exists(simulations_output_path):
-            PBSService.execute_job_array(work_dir=f"{simulations_work_dir}jobs/", output_dir=f"{simulations_work_dir}jobs_output/", jobs_commands=[[os.getenv("CONDA_ACT_CMD"), f"cd {simulations_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={simulations_input_path}"]])
+            simulation_cmd = f"{os.getenv('CONDA_ACT_CMD')};cd {simulations_work_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={simulations_input_path}"
+            res = os.system(simulation_cmd)
         logger.info(f"computed expectations based on {simulations_num} simulations successfully")
         expected_events_num = pd.read_csv(simulations_output_path)
         expected_events_num["ploidity_events_num"] = expected_events_num[["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(numeric_only=True, axis=1)
@@ -147,10 +148,7 @@ class Pipeline:
         if not os.path.exists(sm_output_dir) or len(os.listdir(sm_output_dir)) < mappings_num:
             commands = [os.getenv("CONDA_ACT_CMD"), f"cd {sm_work_dir}",
                      f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}"]
-            if parallel:
-                PBSService.execute_job_array(work_dir=f"{sm_work_dir}jobs/", output_dir=f"{sm_work_dir}jobs_output/", jobs_commands=[commands])
-            else:
-                res = os.system(";".join(commands))
+            res = os.system(";".join(commands))
         logger.info(f"computed {mappings_num} mappings successfully")
         mappings = self._process_mappings(stochastic_mappings_dir=sm_output_dir,
                                           mappings_num=mappings_num)
