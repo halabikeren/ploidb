@@ -82,7 +82,7 @@ def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_
                                                                         classification_based_on_expectations=False,
                                                                         taxonomic_classification_data=taxonomic_classification,
                                                                         parallel=parallel)
-    test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv")
+    test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(tree_path=tree_path,
                                          ploidy_classification_data=test_ploidity_classification,
                                          output_path=f"{output_dir}/classified_tree.phyloxml")
