@@ -211,7 +211,7 @@ class Pipeline:
                     num_tomax_mappings += 1
                     continue
                 num_considered_mappings += 1
-                mapping["ploidity_events_num"] = mapping["DUPLICATION"] + mapping["DEMI-DUPLICATION"] + mapping["BASE-NUMBER"]
+                mapping["ploidity_events_num"] = np.round(mapping[["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(axis=1))
                 mapping["is_diploid"] = mapping["ploidity_events_num"] < 1
                 mapping["is_polyploid"] = mapping["ploidity_events_num"] >= 1
                 mappings.append(mapping)
