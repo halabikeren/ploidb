@@ -42,6 +42,7 @@ class ChromevolInput:
     tree_scaling_factor: Optional[float] = None
     optimize_points_num: Union[str, int] = "10,3,1"
     optimize_iter_num: Union[str, int] = "0,2,5"
+    num_trials: Union[str, int] = 10
     run_stochastic_mapping: bool = False
     num_of_simulations: int = 1000
     states_frequencies_path: Optional[str] = None
@@ -84,8 +85,7 @@ class ChromevolExecutor:
             input_string += states_frequencies_template.format(states_frequencies_path=input_args["states_frequencies_path"])
         if "tree_scaling_factor" in input_args and input_args["tree_scaling_factor"] is not None:
             input_string += tree_scaling_factor_template.format(tree_scaling_factor=input_args["tree_scaling_factor"])
-        input_string = input_string.replace("False", "false").replace("True",
-                                                                      "true")  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
+        input_string = input_string.replace("False", "false").replace("True", "true")  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
         with open(chromevol_input.input_path, "w") as outfile:
             outfile.write(input_string)
         return chromevol_input
@@ -94,6 +94,15 @@ class ChromevolExecutor:
     def _exec(chromevol_input_path: str) -> int:
         cmd = f"{os.getenv('CONDA_ACT_CMD')};cd {os.path.dirname(chromevol_input_path)};{os.getenv('CHROMEVOL_EXEC')} param={os.path.abspath(chromevol_input_path)}"
         res = os.system(cmd)
+        return res
+
+    @staticmethod
+    def _retry(input_args: Dict[str, str]) -> int:
+        input_args["num_trials"] = "15"
+        input_args["optimize_points_num"] = "2,1"
+        input_args["optimize_iter_num"] = "2,5"
+        chromevol_input = ChromevolExecutor._get_input(input_args=input_args)
+        res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)
         return res
 
     @staticmethod
@@ -215,7 +224,13 @@ class ChromevolExecutor:
     @staticmethod
     def run(input_args: Dict[str, str]) -> ChromevolOutput:
         chromevol_input = ChromevolExecutor._get_input(input_args=input_args)
+        raw_output_path = f"{chromevol_input.output_dir}/chromEvol.res"
         res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)
+        if not os.path.exists(raw_output_path):
+            res = ChromevolExecutor._retry(input_args=input_args)
+            if not os.path.exists(raw_output_path):
+                logger.warning(f"retry failed to generate {raw_output_path}")
+                return None
         chromevol_output = ChromevolExecutor._parse_output(chromevol_input.output_dir)
         return chromevol_output
 

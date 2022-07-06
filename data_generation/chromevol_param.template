@@ -18,6 +18,7 @@ _tolParamOptimization = 0.1
 _baseNumOptimizationMethod = Ranges
 _optimizePointsNum = {optimize_points_num}
 _optimizeIterNum = {optimize_iter_num}
+_maxNumOfTrials = {num_trials}
 
 _simulateData = {_simulate}
 _runStochasticMapping = {run_stochastic_mapping}
