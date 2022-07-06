@@ -66,11 +66,16 @@ class Pipeline:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
         model_to_io = self._create_models_input_files(tree_path=tree_path, counts_path=counts_path, work_dir=model_selection_work_dir)
-        jobs_commands = [[os.getenv("CONDA_ACT_CMD"), f"cd {model_selection_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}"] for model_name in model_to_io if not os.path.exists(model_to_io[model_name]['output_path']) and model_name != most_complex_model]
+        jobs_commands = []
+        model_names = list(model_to_io.keys())
+        for model_name in model_names:
+            if not os.path.exists(model_to_io[model_name]["output_path"]):
+                jobs_commands.append([os.getenv("CONDA_ACT_CMD"), f"cd {model_selection_work_dir}", f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}"])
         most_complex_model_cmd = None
         if not os.path.exists(model_to_io[most_complex_model]['output_path']):
             most_complex_model_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {model_selection_work_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[most_complex_model]['input_path']}"
-        if len(jobs_commands) > 0 and most_complex_model_cmd == None:
+        logger.info(f"# models to fit = {len(jobs_commands) + 1 if most_complex_model_cmd is not None else 0}")
+        if len(jobs_commands) > 0:
             if parallel:
                 # PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
                 jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=f"{model_selection_work_dir}jobs/",
@@ -80,9 +85,16 @@ class Pipeline:
                 PBSService.wait_for_jobs(jobs_ids=jobs_ids)
             else:
                 for job_commands_set in jobs_commands:
-                    logger.info(f"submitting job commands set {jobs_commands.index(job_commands_set)}")
+
+                    model_name = model_names[jobs_commands.index(job_commands_set)]
+                    logger.info(f"submitting job commands for model {model_name}")
                     res = os.system(";".join(job_commands_set))
+                    if not os.path.exists(model_to_io[model_name]['output_path']):
+                        logger.error(f"execution of model {model_name} fit failed after retry and thus the model will be excluded from model selection")
+                        del model_to_io[model_name]
+                        continue
         if most_complex_model_cmd is not None:
+            logger.info(f"fitting the most complex model")
             res = os.system(most_complex_model_cmd)
         logger.info(f"completed execution of chromevol across {len(jobs_commands)} different models")
         return self._select_best_model(model_to_io)
@@ -155,7 +167,8 @@ class Pipeline:
             res = os.system(";".join(commands))
         logger.info(f"computed {mappings_num} mappings successfully")
         mappings = self._process_mappings(stochastic_mappings_dir=sm_output_dir,
-                                          mappings_num=mappings_num)
+                                          mappings_num=mappings_num,
+                                          tree_with_states_path=f"{sm_work_dir}/MLAncestralReconstruction.tree")
         expected_events_num = pd.read_csv(f"{sm_output_dir}/stMapping_root_to_leaf_exp.csv")
         expected_events_num["ploidity_events_num"] = expected_events_num[
             ["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(numeric_only=True, axis=1)
@@ -197,7 +210,21 @@ class Pipeline:
         return  best_coeff
 
     @staticmethod
-    def _process_mappings(stochastic_mappings_dir: str, mappings_num: int, missing_mappings_threshold: float = 0.8) -> List[pd.DataFrame]:
+    def _get_inferred_is_polyploid(taxon: str, tree_with_states: Tree, node_to_is_polyploid: dict[str, bool]) -> bool:
+        taxon_node = [l for l in tree_with_states.get_leaves() if l.name.lower().stsrtswith(taxon.lower())][0]
+        taxon_chromosomes_number = int(taxon_node.name.split("-")[-1])
+        taxon_parent_node = taxon_node.up
+        parent_name = "-".join(taxon_parent_node.name.split("-")[:-1])
+        if parent_name in node_to_is_polyploid and node_to_is_polyploid[parent_name]:
+            return True
+        taxon_parent_chromosomes_number = int(taxon_parent_node.name.split("-")[-1])
+        if taxon_chromosomes_number >= taxon_parent_chromosomes_number * 1.5:
+            return True
+        return False
+
+    @staticmethod
+    def _process_mappings(stochastic_mappings_dir: str, tree_with_states_path: str, mappings_num: int, missing_mappings_threshold: float = 0.8) -> List[pd.DataFrame]:
+        tree_with_states = Tree(tree_with_states_path, format=1)
         num_failed_mappings, num_tomax_mappings, num_considered_mappings = 0, 0, 0
         mappings = []
         for path in os.listdir(stochastic_mappings_dir):
@@ -206,21 +233,23 @@ class Pipeline:
                 missing_data_fraction = mapping.isnull().sum().sum() / (mapping.shape[0]*mapping.shape[1])
                 if missing_data_fraction > 0.5:
                     num_failed_mappings += 1
-                    continue
                 elif np.any(mapping["TOMAX"] >= 1):
                     num_tomax_mappings += 1
-                    continue
                 num_considered_mappings += 1
-                mapping["ploidity_events_num"] = np.round(mapping[["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(axis=1))
+                mapping["ploidity_events_num"] = np.round(mapping[["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(axis=1, skipna=False))
                 mapping["is_diploid"] = mapping["ploidity_events_num"] < 1
                 mapping["is_polyploid"] = mapping["ploidity_events_num"] >= 1
+                node_to_is_polyploid = mapping.set_index("NODE")["is_polyploid"].to_dict()
+                mapping["inferred_is_polyploid"] = mapping[["is_diploid", "NODE", "ploidity_events_num"]].apply(lambda record: np.nan if pd.notna(record.ploidity_events_num) else Pipeline._get_inferred_is_polyploid(taxon=record.NODE,
+                                                                                                                                                                                                                       tree_with_states=tree_with_states,
+                                                                                                                                                                                                                       node_to_is_polyploid=node_to_is_polyploid), axis=1)
+                mapping["inferred_is_diploid"] = 1 - mapping["inferred_is_polyploid"]
                 mappings.append(mapping)
-        logger.info(f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num)}% ({num_failed_mappings} / {mappings_num})")
+        logger.info(f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num), 2}% ({num_failed_mappings} / {mappings_num})")
         logger.info(
-            f"% mappings with trajectories that reached max chromosome number = {np.round(num_tomax_mappings / mappings_num)}% ({num_tomax_mappings} / {mappings_num})")
+            f"% mappings with trajectories that reached max chromosome number = {np.round(num_tomax_mappings / mappings_num, 2)}% ({num_tomax_mappings} / {mappings_num})")
         if num_considered_mappings < mappings_num * missing_mappings_threshold:
-            logger.error(f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt")
-            exit(1)
+            logger.warning(f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt")
         return mappings
 
     def _get_stochastic_mappings_based_thresholds(self, mappings: List[pd.DataFrame], expected_events_num: pd.DataFrame) -> Tuple[float, float]:
@@ -234,11 +263,21 @@ class Pipeline:
     def _get_frequency_based_ploidity_classification(taxon: str, mappings: List[pd.DataFrame], polyploidity_threshold: float = 0.9, diploidity_threshold: float = 0.1) -> int: # 0 - diploid, 1 - polyploid, np.nan - unable to determine
         if taxon.lower() not in mappings[0].NODE.str.lower().tolist():
             return np.nan
-        num_mappings,  num_polyploid_supporting_mappings = len(mappings), 0
+        num_polyploid_supporting_mappings, num_supporting_mappings = 0, 0
         for mapping in mappings:
             if mapping.loc[mapping.NODE.str.lower() == taxon.lower(), "is_polyploid"].values[0]:
                 num_polyploid_supporting_mappings += 1
-        polyploidity_frequency_across_mappings = num_polyploid_supporting_mappings/num_mappings
+            if np.any(mapping.loc[mapping.NODE.str.lower() == taxon.lower()][["is_polyploid", "is_diploid"]]):
+                num_supporting_mappings += 1
+        if num_supporting_mappings < len(mappings) * 0.8:
+            logger.warning(f"less than 80% of the mappings succeeded mapping events to taxon {taxon} ({num_supporting_mappings} out of {len(mappings)})")
+        if num_supporting_mappings == 0:
+            logger.info(f"all mappings failed, will infer ploidy level based on parent nodes")
+            for mapping in mappings:
+                if mapping.loc[mapping.NODE.str.lower() == taxon.lower(), "inferred_is_polyploid"].values[0]:
+                    num_polyploid_supporting_mappings += 1
+                num_supporting_mappings += 1
+        polyploidity_frequency_across_mappings = num_polyploid_supporting_mappings / num_supporting_mappings
         if polyploidity_frequency_across_mappings >= polyploidity_threshold:
             return 1
         elif polyploidity_frequency_across_mappings <= diploidity_threshold:
