@@ -211,7 +211,7 @@ class Pipeline:
 
     @staticmethod
     def _get_inferred_is_polyploid(taxon: str, tree_with_states: Tree, node_to_is_polyploid: dict[str, bool]) -> bool:
-        taxon_node = [l for l in tree_with_states.get_leaves() if l.name.lower().stsrtswith(taxon.lower())][0]
+        taxon_node = [l for l in tree_with_states.get_leaves() if l.name.lower().startswith(taxon.lower())][0]
         taxon_chromosomes_number = int(taxon_node.name.split("-")[-1])
         taxon_parent_node = taxon_node.up
         parent_name = "-".join(taxon_parent_node.name.split("-")[:-1])
@@ -318,7 +318,10 @@ class Pipeline:
                 ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: np.nan if taxon not in expected_events_num.NODE.tolist() else (0 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] <= diploidity_threshold else (1 if expected_events_num.loc[expected_events_num.NODE == taxon, "ploidity_events_num"].values[0] >= polyploidity_threshold else np.nan)))
             else:
                 logger.info(f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings")
-                ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon, mappings=mappings, polyploidity_threshold=polyploidity_threshold, diploidity_threshold=diploidity_threshold))
+                ploidy_classification["Ploidy inference"] = ploidy_classification["Taxon"].apply(lambda taxon: Pipeline._get_frequency_based_ploidity_classification(taxon=taxon,
+                                                                                                                                                                     mappings=mappings,
+                                                                                                                                                                     polyploidity_threshold=polyploidity_threshold,
+                                                                                                                                                                     diploidity_threshold=diploidity_threshold))
         logger.info(
             f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification")
         if taxonomic_classification_data is not None:

@@ -51,7 +51,28 @@ logger = logging.getLogger(__name__)
     required=False,
     default=False
 )
-def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_path: str, taxonomic_classification_path: Optional[str], parallel: bool = False):
+@click.option(
+    "--diploidy_threshold",
+    help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as diploids",
+    type= click.FloatRange(min=0, max=1),
+    required=False,
+    default=0.1
+)
+@click.option(
+    "--polyploidy_threshold",
+    help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as polyploids",
+    type= click.FloatRange(min=0, max=1),
+    required=False,
+    default=0.9
+)
+def exec_ploidb_pipeline(counts_path: str,
+                         tree_path: str,
+                         output_dir: str,
+                         log_path: str,
+                         taxonomic_classification_path: Optional[str],
+                         parallel: bool,
+                         diploidy_threshold: float,
+                         polyploidy_threshold: float):
 
     logging.basicConfig(
         level=logging.INFO,
@@ -80,7 +101,9 @@ def exec_ploidb_pipeline(counts_path: str, tree_path: str, output_dir: str, log_
                                                                         mappings_num=1000,
                                                                         classification_based_on_expectations=False,
                                                                         taxonomic_classification_data=taxonomic_classification,
-                                                                        parallel=parallel)
+                                                                        parallel=parallel,
+                                                                        diploidity_threshold=diploidy_threshold,
+                                                                        polyploidity_threshold=polyploidy_threshold)
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(tree_path=tree_path,
                                          ploidy_classification_data=test_ploidity_classification,
