@@ -60,7 +60,7 @@ class PBSService:
         return curr_jobs_num
 
     @staticmethod
-    def generate_jobs(jobs_commands: List[List[str]], work_dir: str, output_dir: str) -> List[str]:
+    def generate_jobs(jobs_commands: List[List[str]], work_dir: str, output_dir: str, ram_per_job_gb: int = 2) -> List[str]:
         jobs_paths, job_output_paths = [], []
         for i in range(len(jobs_commands)):
             job_path = f"{work_dir}/{i}.sh"
@@ -73,7 +73,7 @@ class PBSService:
                 commands=[
                              os.environ.get("CONDA_ACT_CMD", "")
                          ] + jobs_commands[i],
-                ram_gb_size=4
+                ram_gb_size=ram_per_job_gb
             )
             jobs_paths.append(job_path)
             job_output_paths.append(job_output_path)
@@ -111,13 +111,14 @@ class PBSService:
             output_dir: str,
             jobs_commands: List[List[str]],
             max_parallel_jobs: int = 1900,
+            ram_per_job_gb: int = 2
     ):
         os.makedirs(work_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"# input paths to execute commands on = {len(jobs_commands)}")
 
         if len(jobs_commands) > 0:
-            jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=work_dir, output_dir=output_dir)
+            jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=work_dir, output_dir=output_dir, ram_per_job_gb=ram_per_job_gb)
             jobs_ids = PBSService.submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs)
             PBSService.wait_for_jobs(jobs_ids=jobs_ids)
 
