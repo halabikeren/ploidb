@@ -99,11 +99,11 @@ def exec_ploidb_pipeline(counts_path: str,
                                                                         full_tree_path=tree_path,
                                                                         model_parameters_path=best_model_results_path,
                                                                         mappings_num=1000,
-                                                                        classification_based_on_expectations=False,
                                                                         taxonomic_classification_data=taxonomic_classification,
                                                                         parallel=parallel,
                                                                         diploidity_threshold=diploidy_threshold,
-                                                                        polyploidity_threshold=polyploidy_threshold)
+                                                                        polyploidity_threshold=polyploidy_threshold,
+                                                                        optimize_thresholds=True)
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(tree_path=tree_path,
                                          ploidy_classification_data=test_ploidity_classification,
