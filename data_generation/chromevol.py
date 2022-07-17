@@ -139,6 +139,7 @@ class ChromevolExecutor:
         input_string = input_string.replace("False", "false").replace(
             "True", "true"
         )  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
+        input_string = input_string.replace("//", "/")
         with open(chromevol_input.input_path, "w") as outfile:
             outfile.write(input_string)
         return chromevol_input
@@ -146,6 +147,7 @@ class ChromevolExecutor:
     @staticmethod
     def _exec(chromevol_input_path: str) -> int:
         cmd = f"{os.getenv('CONDA_ACT_CMD')};cd {os.path.dirname(chromevol_input_path)};{os.getenv('CHROMEVOL_EXEC')} param={os.path.abspath(chromevol_input_path)}"
+        cmd.replace("//", "/")
         res = os.system(cmd)
         return res
 
@@ -329,10 +331,16 @@ class ChromevolExecutor:
         chromevol_input = ChromevolExecutor._get_input(input_args=input_args)
         raw_output_path = f"{chromevol_input.output_dir}/chromEvol.res"
         res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)
-        if not os.path.exists(raw_output_path):
+        chromevol_output = None
+        if res != 0:
             res = ChromevolExecutor._retry(input_args=input_args)
-            if not os.path.exists(raw_output_path):
-                logger.warning(f"retry failed to generate {raw_output_path}")
-                return None
-        chromevol_output = ChromevolExecutor._parse_output(chromevol_input.output_dir)
+            if res != 0:
+                logger.warning(
+                    f"retry failed execute chromevol on {chromevol_input.input_path}"
+                )
+                return chromevol_output
+        if os.path.exists(raw_output_path):
+            chromevol_output = ChromevolExecutor._parse_output(
+                chromevol_input.output_dir
+            )
         return chromevol_output

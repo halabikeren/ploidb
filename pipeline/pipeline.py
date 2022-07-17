@@ -185,7 +185,10 @@ class Pipeline:
         mappings_num: int = 100,
         optimize: bool = False,
     ) -> list[pd.DataFrame]:
-        sm_work_dir = f"{self.work_dir}stochastic_mapping/"
+        sm_work_dir = self.work_dir
+        if counts_path.startswith(f"{self.work_dir}/simulations/"):
+            sm_work_dir = os.path.dirname(counts_path)
+        sm_work_dir += "/stochastic_mapping/"
         os.makedirs(sm_work_dir, exist_ok=True)
         sm_input_path, sm_output_dir = self._create_stochastic_mapping_input(
             counts_path=counts_path,
@@ -329,7 +332,7 @@ class Pipeline:
                 mapping["inferred_is_diploid"] = 1 - mapping["inferred_is_polyploid"]
                 mappings.append(mapping)
         logger.info(
-            f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num), 2}% ({num_failed_mappings} / {mappings_num})"
+            f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num, 2)}% ({num_failed_mappings} / {mappings_num})"
         )
         logger.info(
             f"% mappings with trajectories that reached max chromosome number = {np.round(num_tomax_mappings / mappings_num, 2)}% ({num_tomax_mappings} / {mappings_num})"
@@ -400,14 +403,16 @@ class Pipeline:
         min_observed_chr_count: int,
         max_observed_chr_count: int,
         simulations_dir: str,
-        trials_num: int,
+        trials_num: int = 1000,
+        simulations_num: int = 10,
         parallel: bool = False,
-    ) -> int:
+    ) -> list[str]:
         frequencies_path = f"{simulations_dir}/simulations_states_frequencies.txt"
         Pipeline._parse_simulation_frequencies(
             model_parameters_path=model_parameters_path, output_path=frequencies_path
         )
-        simulations_commands = []
+        counts_path_to_simulations_commands = dict()
+        successful_simulations_dirs = []
         for i in range(trials_num):
             simulation_dir = f"{simulations_dir}/{i}/"
             counts_path = f"{simulation_dir}/counts.fasta"
@@ -428,21 +433,53 @@ class Pipeline:
                     f"cd {simulation_dir}",
                     f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
                 ]
-                simulations_commands.append(commands)
+                counts_path_to_simulations_commands[counts_path] = commands
+            else:
+                simulation_dir = f"{os.path.dirname(counts_path)}/"
+                try:
+                    Pipeline._extract_ploidy_levels(simulation_dir=simulation_dir)
+                    successful_simulations_dirs.append(simulation_dir)
+                except ValueError as e:
+                    logger.info(f"simulation {i} failed with error {e}")
+                if len(successful_simulations_dirs) == simulations_num:
+                    logger.info(
+                        f"reached {simulations_num} successful simulations after {i} trials"
+                    )
+                    return successful_simulations_dirs
         if not parallel:
-            for commands in simulations_commands:
-                res = os.system(";".join(commands))
+            trial_index = 0
+            for counts_path in counts_path_to_simulations_commands:
+                trial_index += 1
+                joined_cmd = ";".join(
+                    counts_path_to_simulations_commands[counts_path]
+                ).replace("//", "/")
+                res = os.system(joined_cmd)
+                if os.path.exists(counts_path):
+                    simulation_dir = os.path.dirname(counts_path)
+                    try:
+                        Pipeline._extract_ploidy_levels(simulation_dir=simulation_dir)
+                        successful_simulations_dirs.append(simulation_dir)
+                    except ValueError as e:
+                        logger.info(f"trial {trial_index} failed with error {e}")
+                    if len(successful_simulations_dirs) == simulations_num:
+                        logger.info(
+                            f"reached {simulations_num} successful simulations after {trial_index} trials"
+                        )
+                        return successful_simulations_dirs
         else:
             PBSService.execute_job_array(
                 work_dir=f"{simulations_dir}jobs/",
                 output_dir=f"{simulations_dir}jobs_output/",
-                jobs_commands=simulations_commands,
+                jobs_commands=list(counts_path_to_simulations_commands.values()),
                 max_parallel_jobs=100,
                 ram_per_job_gb=1,
             )
 
-        logger.info(f"generated {trials_num} mappings, will now filter out failed ones")
-        return 0
+        if len(successful_simulations_dirs) < simulations_num:
+            raise ValueError(
+                f"after {trials_num} trials, chromevol succeeded in creating only {len(successful_simulations_dirs)} successful simulations"
+            )
+        return successful_simulations_dirs
 
     @staticmethod
     def _extract_ploidy_levels(simulation_dir: str):
@@ -473,10 +510,15 @@ class Pipeline:
                 if abs(src - dst) > 1:
                     node_to_is_polyploid[child] = 1
                     continue
+            if child not in node_to_is_polyploid:
+                node_to_is_polyploid[child] = 0
         node_to_is_polyploid_path = f"{simulation_dir}/node_to_is_polyploid.csv"
-        pd.DataFrame.from_dict(
-            node_to_is_polyploid, orient="index", columns=["node", "is_polyploid"]
-        ).to_csv(node_to_is_polyploid_path)
+        node_to_is_polyploid_df = (
+            pd.DataFrame.from_dict(node_to_is_polyploid, orient="index")
+            .reset_index()
+            .rename(columns={"index": "node", 0: "is_polyploid"})
+        )
+        node_to_is_polyploid_df.to_csv(node_to_is_polyploid_path, index=False)
 
     def _get_simulations(
         self,
@@ -493,32 +535,17 @@ class Pipeline:
             for record in list(SeqIO.parse(orig_counts_path, format="fasta"))
         ]
         min_observed_chr_count, max_observed_chr_count = np.min(counts), np.max(counts)
-        res = self._simulate(
+        successful_simulations = self._simulate(
             tree_path=tree_path,
             model_parameters_path=model_parameters_path,
             min_observed_chr_count=min_observed_chr_count,
             max_observed_chr_count=max_observed_chr_count,
             simulations_dir=simulations_dir,
             trials_num=trials_num,
+            simulations_num=simulations_num,
             parallel=parallel,
         )
-
-        successful_simulations = list()
-        for i in range(trials_num):
-            simulation_dir = f"{simulations_dir}/{i}/"
-            try:
-                self._extract_ploidy_levels(simulation_dir=simulation_dir)
-                successful_simulations.append(simulation_dir)
-            except ValueError as e:
-                logger.info(f"simulation {i} failed with error {e}")
-                continue
-            if len(successful_simulations) == simulations_num:
-                return successful_simulations
-
-        if len(successful_simulations) < simulations_num:
-            raise ValueError(
-                f"after {trials_num} trials, chromevol succeeded in creating only {len(successful_simulations)} successful simulations"
-            )
+        return successful_simulations
 
     def _get_simulation_based_thresholds(
         self,
@@ -540,30 +567,43 @@ class Pipeline:
         )
 
         # for each one, do mappings and then extract frequencies of poly events per species
-        simulations_ploidy_data = []
-        for simulation_dir in simulations_dirs:
-            mappings = self._get_stochastic_mappings(
-                counts_path=f"{simulation_dir}counts.fata",
-                tree_path=tree_path,
-                model_parameters_path=model_parameters_path,
-                mappings_num=mappings_num,
-                optimize=True,
-            )
-            node_to_ploidy_level = pd.read_csv(
-                f"{simulation_dir}node_to_is_polyploid.csv"
-            )
-            node_to_ploidy_level[
-                "duplication_events_frequency"
-            ] = node_to_ploidy_level.node.apply(
-                lambda node: self._get_frequency_of_duplication_events(
-                    taxon=node, mappings=mappings
+        logger.info(
+            f"creating stochastic mappings per simulation to compute duplication events frequencies"
+        )
+        simulations_ploidy_data_path = (
+            f"{self.work_dir}/simulations/simulations_ploidy_data.csv"
+        )
+        if not os.path.exists(simulations_ploidy_data_path):
+            simulations_ploidy_data = []
+            for simulation_dir in simulations_dirs:
+                mappings = self._get_stochastic_mappings(
+                    counts_path=f"{simulation_dir}counts.fasta",
+                    tree_path=tree_path,
+                    model_parameters_path=model_parameters_path,
+                    mappings_num=mappings_num,
+                    optimize=True,
                 )
-            )
-            node_to_ploidy_level["simulation"] = simulation_dir
-            simulations_ploidy_data.append(node_to_ploidy_level)
-        simulations_ploidy_data = pd.concat(simulations_ploidy_data)
+                node_to_ploidy_level = pd.read_csv(
+                    f"{simulation_dir}node_to_is_polyploid.csv"
+                )
+                node_to_ploidy_level[
+                    "duplication_events_frequency"
+                ] = node_to_ploidy_level.node.apply(
+                    lambda node: self._get_frequency_of_duplication_events(
+                        taxon=node, mappings=mappings
+                    )
+                )
+                node_to_ploidy_level["simulation"] = simulation_dir
+                simulations_ploidy_data.append(node_to_ploidy_level)
+            simulations_ploidy_data = pd.concat(simulations_ploidy_data)
+            simulations_ploidy_data.to_csv(simulations_ploidy_data_path, index=False)
+        else:
+            simulations_ploidy_data = pd.read_csv(simulations_ploidy_data_path)
 
         # learn optimal thresholds based on frequencies
+        logger.info(
+            f"devising optimal thresholds for events frequency for polyploidy and diploidy classifications"
+        )
         diploidity_threshold = self._get_optimal_threshold(
             ploidy_data=simulations_ploidy_data
         )
@@ -574,7 +614,6 @@ class Pipeline:
             f"optimal diploidity threshold = {diploidity_threshold}, optimal polyploidity threshold = {polyploidity_threshold}"
         )
         return diploidity_threshold, polyploidity_threshold
-        pass
 
     @staticmethod
     def _get_frequency_of_duplication_events(
