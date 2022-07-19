@@ -248,14 +248,22 @@ class Pipeline:
     @staticmethod
     def _get_optimal_threshold(ploidy_data: pd.DataFrame, for_polyploidy: bool = True):
         positive_label_code = 1 if for_polyploidy else 0
-        true_values = ploidy_data["is_polyploid"] == positive_label_code
+        true_values = (
+            (ploidy_data["is_polyploid"] == positive_label_code)
+            .astype(np.int16)
+            .tolist()
+        )
         best_threshold, best_coeff = np.nan, -1.1
         thresholds = [0.01 + 0.1 * i for i in range(11)]
         for freq_threshold in thresholds:
-            predicted_values = Pipeline._get_predicted_values(
-                ploidy_data=ploidy_data,
-                for_polyploidy=for_polyploidy,
-                freq_threshold=freq_threshold,
+            predicted_values = (
+                Pipeline._get_predicted_values(
+                    ploidy_data=ploidy_data,
+                    for_polyploidy=for_polyploidy,
+                    freq_threshold=freq_threshold,
+                )
+                .astype(np.int16)
+                .tolist()
             )
             coeff = matthews_corrcoef(y_true=true_values, y_pred=predicted_values)
             logger.info(
@@ -443,7 +451,7 @@ class Pipeline:
                     logger.info(f"simulation {i} failed with error {e}")
                 if len(successful_simulations_dirs) == simulations_num:
                     logger.info(
-                        f"reached {simulations_num} successful simulations after {i} trials"
+                        f"reached {simulations_num} successful simulations after {i+1} trials"
                     )
                     return successful_simulations_dirs
         if not parallel:
@@ -577,7 +585,7 @@ class Pipeline:
             simulations_ploidy_data = []
             for simulation_dir in simulations_dirs:
                 mappings = self._get_stochastic_mappings(
-                    counts_path=f"{simulation_dir}counts.fasta",
+                    counts_path=f"{simulation_dir}/counts.fasta",
                     tree_path=tree_path,
                     model_parameters_path=model_parameters_path,
                     mappings_num=mappings_num,
@@ -605,10 +613,10 @@ class Pipeline:
             f"devising optimal thresholds for events frequency for polyploidy and diploidy classifications"
         )
         diploidity_threshold = self._get_optimal_threshold(
-            ploidy_data=simulations_ploidy_data
+            ploidy_data=simulations_ploidy_data, for_polyploidy=False
         )
         polyploidity_threshold = self._get_optimal_threshold(
-            ploidy_data=simulations_ploidy_data
+            ploidy_data=simulations_ploidy_data, for_polyploidy=True
         )
         logger.info(
             f"optimal diploidity threshold = {diploidity_threshold}, optimal polyploidity threshold = {polyploidity_threshold}"
