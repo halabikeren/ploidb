@@ -601,7 +601,7 @@ class Pipeline:
                     optimize=True,
                 )
                 node_to_ploidy_level = pd.read_csv(
-                    f"{simulation_dir}node_to_is_polyploid.csv"
+                    f"{simulation_dir}/node_to_is_polyploid.csv"
                 )
                 node_to_duplication_events_frequency = self._get_frequency_of_duplication_events(
                     mappings=mappings
