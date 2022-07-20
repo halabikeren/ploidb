@@ -689,6 +689,7 @@ class Pipeline:
             else (0 if record.is_diploid else np.nan),
             axis=1,
         )
+        taxon_to_polyploidy_support.NODE = taxon_to_polyploidy_support.NODE.str.lower()
         return taxon_to_polyploidy_support.set_index("NODE")[
             "ploidy_inference"
         ].to_dict()
