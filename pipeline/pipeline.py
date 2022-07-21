@@ -249,7 +249,11 @@ class Pipeline:
         return predicted_values
 
     @staticmethod
-    def _get_optimal_threshold(ploidy_data: pd.DataFrame, for_polyploidy: bool = True):
+    def _get_optimal_threshold(
+        ploidy_data: pd.DataFrame,
+        for_polyploidy: bool = True,
+        upper_bound: float = 1.01,
+    ) -> tuple(float, float):
         positive_label_code = 1 if for_polyploidy else 0
         true_values = (
             (ploidy_data["is_polyploid"] == positive_label_code)
@@ -257,7 +261,10 @@ class Pipeline:
             .tolist()
         )
         best_threshold, best_coeff = np.nan, -1.1
-        thresholds = [0.01 + 0.1 * i for i in range(11)]
+        thresholds = [i * 0.1 for i in range(1, 11) if i * 0.1 < upper_bound]
+        logger.info(
+            f"maximal threshold to examine  for {'polyploidy' if for_polyploidy else 'diploidy'} threshold = {thresholds[-1]}"
+        )
         for freq_threshold in thresholds:
             predicted_values = (
                 Pipeline._get_predicted_values(
@@ -270,11 +277,11 @@ class Pipeline:
             )
             coeff = matthews_corrcoef(y_true=true_values, y_pred=predicted_values)
             logger.info(
-                f"matthews correlation coefficient for {'polyploidy' if for_polyploidy else 'diploidy'} and threshold of {freq_threshold}"
+                f"matthews correlation coefficient for {'polyploidy' if for_polyploidy else 'diploidy'} and threshold of {freq_threshold} = {coeff}"
             )
             if coeff > best_coeff:
                 best_threshold, best_coeff = freq_threshold, coeff
-        return best_coeff
+        return best_threshold, best_coeff
 
     @staticmethod
     def _get_inferred_is_polyploid(
@@ -626,16 +633,20 @@ class Pipeline:
         logger.info(
             f"devising optimal thresholds for events frequency for polyploidy and diploidy classifications"
         )
-        if not os.path.exists(thresholds_path):
-            diploidity_threshold = self._get_optimal_threshold(
-                ploidy_data=simulations_ploidy_data, for_polyploidy=False
-            )
-            polyploidity_threshold = self._get_optimal_threshold(
+        if True:  # not os.path.exists(thresholds_path):
+            polyploidity_threshold, polyploidy_coeff = self._get_optimal_threshold(
                 ploidy_data=simulations_ploidy_data, for_polyploidy=True
+            )
+            diploidity_threshold, diploidy_coeff = self._get_optimal_threshold(
+                ploidy_data=simulations_ploidy_data,
+                for_polyploidy=False,
+                upper_bound=polyploidity_threshold,
             )
             optimal_thresholds = {
                 "diploidity_threshold": diploidity_threshold,
+                "diploidity_coeff": diploidy_coeff,
                 "polyploidity_threshold": polyploidity_threshold,
+                "polyploidity_coeff": polyploidy_coeff,
             }
             with open(thresholds_path, "wb") as outfile:
                 pickle.dump(obj=optimal_thresholds, file=outfile)
@@ -646,7 +657,7 @@ class Pipeline:
             polyploidity_threshold = optimal_thresholds["polyploidity_threshold"]
 
         logger.info(
-            f"optimal diploidity threshold = {diploidity_threshold}, optimal polyploidity threshold = {polyploidity_threshold}"
+            f"optimal diploidity threshold = {diploidity_threshold} (with coeff={diploidy_coeff}, optimal polyploidity threshold = {polyploidity_threshold} (with coeff = {polyploidy_coeff}"
         )
         return diploidity_threshold, polyploidity_threshold
 
