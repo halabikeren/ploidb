@@ -88,7 +88,11 @@ class Pipeline:
         return winning_model
 
     def get_best_model(
-        self, counts_path: str, tree_path: str, parallel: bool = False
+        self,
+        counts_path: str,
+        tree_path: str,
+        parallel: bool = False,
+        ram_per_job: int = 1,
     ) -> str:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
@@ -121,6 +125,7 @@ class Pipeline:
                     jobs_commands=jobs_commands,
                     work_dir=f"{model_selection_work_dir}jobs/",
                     output_dir=f"{model_selection_work_dir}jobs_output/",
+                    ram_per_job_gb=ram_per_job,
                 )
                 jobs_ids = PBSService.submit_jobs(
                     jobs_paths=jobs_paths, max_parallel_jobs=10000
@@ -253,17 +258,18 @@ class Pipeline:
         ploidy_data: pd.DataFrame,
         for_polyploidy: bool = True,
         upper_bound: float = 1.01,
-    ) -> tuple(float, float):
+    ) -> tuple[float, float]:
         positive_label_code = 1 if for_polyploidy else 0
         true_values = (
             (ploidy_data["is_polyploid"] == positive_label_code)
             .astype(np.int16)
             .tolist()
         )
+        num_sim = len(ploidy_data.simulation.unique())
         best_threshold, best_coeff = np.nan, -1.1
-        thresholds = [i * 0.1 for i in range(1, 11) if i * 0.1 < upper_bound]
+        thresholds = [i * 0.1 for i in range(1, 11) if i * 0.1 <= upper_bound]
         logger.info(
-            f"maximal threshold to examine  for {'polyploidy' if for_polyploidy else 'diploidy'} threshold = {thresholds[-1]}"
+            f"maximal threshold to examine  for {'polyploidy' if for_polyploidy else 'diploidy'} threshold = {thresholds[-1]} across {num_sim:,} simulations"
         )
         for freq_threshold in thresholds:
             predicted_values = (
@@ -279,8 +285,10 @@ class Pipeline:
             logger.info(
                 f"matthews correlation coefficient for {'polyploidy' if for_polyploidy else 'diploidy'} and threshold of {freq_threshold} = {coeff}"
             )
-            if coeff > best_coeff:
-                best_threshold, best_coeff = freq_threshold, coeff
+            if coeff >= best_coeff:
+                if coeff > best_coeff or (coeff == best_coeff and for_polyploidy):
+                    best_threshold, best_coeff = freq_threshold, coeff
+
         return best_threshold, best_coeff
 
     @staticmethod
@@ -527,8 +535,9 @@ class Pipeline:
             for transition in transition_regex.finditer(branch_evolution_path.group(0)):
                 src, dst = int(transition.group(1)), int(transition.group(2))
                 if src == 200 or dst == 200:
+                    res = os.system(f"rm -rf {simulation_dir}")
                     raise ValueError(
-                        f"simulation at {simulation_dir} failed due to reaching maximal state 200"
+                        f"simulation at {simulation_dir} failed due to reaching maximal state 200 and was thus removed"
                     )
                 if abs(src - dst) > 1:
                     node_to_is_polyploid[child] = 1
@@ -579,6 +588,7 @@ class Pipeline:
         simulations_num: int = 10,
         trials_num: int = 1000,
         parallel: bool = False,
+        debug: bool = False,
     ) -> Tuple[float, float]:
         simulations_dirs = self._get_simulations(
             orig_counts_path=counts_path,
@@ -593,10 +603,16 @@ class Pipeline:
         logger.info(
             f"creating stochastic mappings per simulation to compute duplication events frequencies"
         )
-        simulations_ploidy_data_path = (
-            f"{self.work_dir}/simulations/simulations_ploidy_data.csv"
-        )
-        thresholds_path = f"{self.work_dir}/simulations/simluation_based_thresholds.pkl"
+        simulations_ploidy_data_path = f"{self.work_dir}/simulations/simulations_ploidy_data_on_{simulations_num}_simulations.csv"
+        sim_num_to_thresholds_path = {
+            simulations_num: f"{self.work_dir}/simulations/{simulations_num}_simulations_based_thresholds.pkl"
+        }
+        if debug:
+            for i in range(10, 100, 10):
+                sim_num_to_thresholds_path[
+                    i
+                ] = f"{self.work_dir}/simulations/{i}_simulations_based_thresholds.pkl"
+
         if not os.path.exists(simulations_ploidy_data_path):
             simulations_ploidy_data = []
             for simulation_dir in simulations_dirs:
@@ -630,18 +646,35 @@ class Pipeline:
             simulations_ploidy_data = pd.read_csv(simulations_ploidy_data_path)
 
         # learn optimal thresholds based on frequencies
-        logger.info(
-            f"devising optimal thresholds for events frequency for polyploidy and diploidy classifications"
-        )
-        if True:  # not os.path.exists(thresholds_path):
-            polyploidity_threshold, polyploidy_coeff = self._get_optimal_threshold(
-                ploidy_data=simulations_ploidy_data, for_polyploidy=True
+        diploidity_threshold, polyploidity_threshold = np.nan, np.nan
+        for sim_num in sim_num_to_thresholds_path:
+            logger.info(
+                f"finding optimal polyploidy and diploidy thresholds based on {sim_num} simulations"
             )
+            thresholds_path = sim_num_to_thresholds_path[sim_num]
+            polyploidity_threshold, polyploidy_coeff = self._get_optimal_threshold(
+                ploidy_data=simulations_ploidy_data.loc[
+                    simulations_ploidy_data.simulation.isin(simulations_dirs[:sim_num])
+                ],
+                for_polyploidy=True,
+            )
+
+            logger.info(
+                f"optimal polyploidy threshold = {polyploidity_threshold} (with coeff={polyploidy_coeff})"
+            )
+
             diploidity_threshold, diploidy_coeff = self._get_optimal_threshold(
-                ploidy_data=simulations_ploidy_data,
+                ploidy_data=simulations_ploidy_data.loc[
+                    simulations_ploidy_data.simulation.isin(simulations_dirs[:sim_num])
+                ],
                 for_polyploidy=False,
                 upper_bound=polyploidity_threshold,
             )
+
+            logger.info(
+                f"optimal diploidy threshold = {diploidity_threshold} (with coeff={diploidy_coeff})"
+            )
+
             optimal_thresholds = {
                 "diploidity_threshold": diploidity_threshold,
                 "diploidity_coeff": diploidy_coeff,
@@ -650,15 +683,13 @@ class Pipeline:
             }
             with open(thresholds_path, "wb") as outfile:
                 pickle.dump(obj=optimal_thresholds, file=outfile)
-        else:
-            with open(thresholds_path, "rb") as infile:
-                optimal_thresholds = pickle.load(file=infile)
-            diploidity_threshold = optimal_thresholds["diploidity_threshold"]
-            polyploidity_threshold = optimal_thresholds["polyploidity_threshold"]
 
-        logger.info(
-            f"optimal diploidity threshold = {diploidity_threshold} (with coeff={diploidy_coeff}, optimal polyploidity threshold = {polyploidity_threshold} (with coeff = {polyploidy_coeff}"
-        )
+            if sim_num == simulations_num:
+                with open(thresholds_path, "rb") as infile:
+                    optimal_thresholds = pickle.load(file=infile)
+                diploidity_threshold = optimal_thresholds["diploidity_threshold"]
+                polyploidity_threshold = optimal_thresholds["polyploidity_threshold"]
+
         return diploidity_threshold, polyploidity_threshold
 
     @staticmethod
@@ -717,6 +748,7 @@ class Pipeline:
         optimize_thresholds: bool = False,
         taxonomic_classification_data: Optional[pd.DataFrame] = None,
         parallel: bool = False,
+        debug: bool = False,
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]
@@ -760,9 +792,10 @@ class Pipeline:
                     tree_path=tree_path,
                     model_parameters_path=model_parameters_path,
                     mappings_num=mappings_num,
-                    simulations_num=10,
+                    simulations_num=100 if debug else 10,
                     trials_num=1000,
                     parallel=parallel,
+                    debug=debug,
                 )
             logger.info(
                 f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings"

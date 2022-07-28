@@ -53,6 +53,13 @@ logger = logging.getLogger(__name__)
     default=False,
 )
 @click.option(
+    "--ram_per_job",
+    help="memory size per job to parallelize on",
+    type=int,
+    required=False,
+    default=1,
+)
+@click.option(
     "--optimize_thresholds",
     help="indicator weather thresholds should be optimized based on simulations",
     type=bool,
@@ -80,6 +87,7 @@ def exec_ploidb_pipeline(
     log_path: str,
     taxonomic_classification_path: Optional[str],
     parallel: bool,
+    ram_per_job: int,
     optimize_thresholds: bool,
     diploidy_threshold: float,
     polyploidy_threshold: float,
@@ -105,7 +113,10 @@ def exec_ploidb_pipeline(
 
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(
-        counts_path=counts_path, tree_path=relevant_tree_path, parallel=parallel
+        counts_path=counts_path,
+        tree_path=relevant_tree_path,
+        parallel=parallel,
+        ram_per_job=ram_per_job,
     )
 
     logger.info(f"searching for optimal classification thresholds")
@@ -125,6 +136,7 @@ def exec_ploidb_pipeline(
         diploidity_threshold=diploidy_threshold,
         polyploidity_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
+        debug=False,
     )
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(
