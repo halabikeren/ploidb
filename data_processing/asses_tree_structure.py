@@ -95,12 +95,13 @@ def asses_tree(
     for i in range(len(genera_batches)):
         group_path = f"{genera_batches_dir}batch_{i}_{group_by}.csv"
         pd.Series(genera_batches[i]).to_csv(group_path, index=False)
-        output_path = f"{output_dir}/batch_{i}_monophyly_status.csv"
-        batch_commands = [
-            f"cd {os.path.dirname(__file__)}",
-            f"python check_tree_monophyly.py --group_path={group_path} --classification_path={classification_path} --group_by={group_by} --tree_path={tree_path} --output_path={output_path}",
-        ]
-        jobs_commands.append(batch_commands)
+        batch_output_path = f"{output_dir}/batch_{i}_monophyly_status.csv"
+        if not os.path.exists(batch_output_path):
+            batch_commands = [
+                f"cd {os.path.dirname(__file__)}",
+                f"python check_tree_monophyly.py --group_path={group_path} --classification_path={classification_path} --group_by={group_by} --tree_path={tree_path} --output_path={batch_output_path}",
+            ]
+            jobs_commands.append(batch_commands)
     if len(jobs_commands) > 0:
         logger.info(f"submitting {len(jobs_commands)} jobs for batches of {group_by}")
         PBSService.execute_job_array(
@@ -112,13 +113,14 @@ def asses_tree(
     logger.info(
         f"processing of genera monophyly status is complete, will now merge results"
     )
-    group_to_monophyly = pd.concat(
-        [
-            pd.read_csv(f"{output_dir}{path}")
-            for path in os.listdir(output_dir)
-            if path.endswith(".csv")
-        ]
-    )
+    status_paths = [
+        f"{output_dir}{path}"
+        for path in os.listdir(output_dir)
+        if path.endswith("_monophyly_status.csv")
+    ]
+    print(f"# paths to concat = {len(status_paths)}")
+    group_to_monophyly = pd.concat([pd.read_csv(path) for path in status_paths])
+    group_to_monophyly.drop_duplicates(inplace=True)
     group_to_monophyly.to_csv(output_path, index=False)
 
 
