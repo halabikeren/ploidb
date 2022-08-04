@@ -90,15 +90,17 @@ def get_largest_monophyletic_group(
 
 def check_monophyly(
     record: pd.Series, tree: Tree, property_name: str, ancestor_to_stats_path: str
-) -> Tuple[bool, str, str, str, float, float]:
+) -> Tuple[bool, str, int, str, str, float, float]:
     group = record[property_name]
     group_leaves = [
         leaf for leaf in tree.get_leaves() if leaf.__dict__[property_name] == group
     ]
+    group_size = len(group_leaves)
     if len(group_leaves) < 2:
         return (
             True,
             "monophyletic",
+            group_size,
             "",
             "".join([l.name for l in group_leaves]),
             1,
@@ -122,7 +124,7 @@ def check_monophyly(
         root=lca,
         property_value=group,
         property_name=property_name,
-        full_group_size=len(group_leaves),
+        full_group_size=group_size,
     )
     largest_monophyletic_group_names = largest_monophyly_root.get_leaf_names()
     fraction_largest_monophyletic_group = float(largest_monophyly_size) / float(
@@ -136,6 +138,7 @@ def check_monophyly(
     return (
         bool(is_monophyletic),
         str(clade_type),
+        group_size,
         monophyly_violators_names,
         largest_monophyletic_group_names,
         fraction_largest_monophyletic_group,
@@ -207,6 +210,7 @@ def compute_genera_monophyly_classification(
         [
             "is_monophyletic",
             "clade_type",
+            "group_size",
             "monophyly_violators",
             "largest_monophyly_members",
             "largest_monophyletic_fraction",
