@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 class PBSService:
     @staticmethod
     def create_job_file(
-            job_path,
-            job_name: str,
-            job_output_dir: str,
-            commands: List[str],
-            queue: str = "itaym",
-            priority: int = 0,
-            cpus_num: int = 1,
-            ram_gb_size: int = 4,
+        job_path,
+        job_name: str,
+        job_output_dir: str,
+        commands: List[str],
+        queue: str = "itaym",
+        priority: int = 0,
+        cpus_num: int = 1,
+        ram_gb_size: int = 4,
     ) -> int:
         os.makedirs(os.path.dirname(job_path), exist_ok=True)
         os.makedirs(os.path.dirname(job_output_dir), exist_ok=True)
@@ -55,12 +55,23 @@ class PBSService:
         :return: returns the current number of jobs under the shell username
         """
         username = getpass.getuser()
-        proc = subprocess.run(f"qselect -u {username} | wc -l", shell=True, check=True, capture_output=True)
+        proc = subprocess.run(
+            f"qselect -u {username} | wc -l",
+            shell=True,
+            check=True,
+            capture_output=True,
+        )
         curr_jobs_num = int(proc.stdout)
         return curr_jobs_num
 
     @staticmethod
-    def generate_jobs(jobs_commands: List[List[str]], work_dir: str, output_dir: str, ram_per_job_gb: int = 2) -> List[str]:
+    def generate_jobs(
+        jobs_commands: List[List[str]],
+        work_dir: str,
+        output_dir: str,
+        ram_per_job_gb: int = 2,
+        queue: str = "itaym",
+    ) -> List[str]:
         jobs_paths, job_output_paths = [], []
         for i in range(len(jobs_commands)):
             job_path = f"{work_dir}/{i}.sh"
@@ -70,10 +81,9 @@ class PBSService:
                 job_path=job_path,
                 job_name=job_name,
                 job_output_dir=job_output_path,
-                commands=[
-                             os.environ.get("CONDA_ACT_CMD", "")
-                         ] + jobs_commands[i],
-                ram_gb_size=ram_per_job_gb
+                commands=[os.environ.get("CONDA_ACT_CMD", "")] + jobs_commands[i],
+                ram_gb_size=ram_per_job_gb,
+                queue=queue,
             )
             jobs_paths.append(job_path)
             job_output_paths.append(job_output_path)
@@ -88,11 +98,13 @@ class PBSService:
             while PBSService.compute_curr_jobs_num() > max_parallel_jobs:
                 sleep(2 * 60)
             try:
-                res = subprocess.check_output(['qsub', f'{jobs_paths[job_index]}'])
+                res = subprocess.check_output(["qsub", f"{jobs_paths[job_index]}"])
                 jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
                 job_index += 1
             except Exception as e:
-                logger.error(f"failed to submit job at index {job_index} due to error {e} with result {res}")
+                logger.error(
+                    f"failed to submit job at index {job_index} due to error {e} with result {res}"
+                )
                 exit(1)
             if job_index % 500 == 0:
                 logger.info(f"submitted {job_index} jobs thus far")
@@ -100,26 +112,45 @@ class PBSService:
 
     @staticmethod
     def wait_for_jobs(jobs_ids: List[str]):
-        jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
+        jobs_complete = np.all(
+            [
+                os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0
+                for job_id in jobs_ids
+            ]
+        )
         while not jobs_complete:
             sleep(60)
-            jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
+            jobs_complete = np.all(
+                [
+                    os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0
+                    for job_id in jobs_ids
+                ]
+            )
 
     @staticmethod
     def execute_job_array(
-            work_dir: str,
-            output_dir: str,
-            jobs_commands: List[List[str]],
-            max_parallel_jobs: int = 1900,
-            ram_per_job_gb: int = 2
+        work_dir: str,
+        output_dir: str,
+        jobs_commands: List[List[str]],
+        max_parallel_jobs: int = 1900,
+        ram_per_job_gb: int = 2,
+        queue: str = "itaym",
     ):
         os.makedirs(work_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"# input paths to execute commands on = {len(jobs_commands)}")
 
         if len(jobs_commands) > 0:
-            jobs_paths = PBSService.generate_jobs(jobs_commands=jobs_commands, work_dir=work_dir, output_dir=output_dir, ram_per_job_gb=ram_per_job_gb)
-            jobs_ids = PBSService.submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs)
+            jobs_paths = PBSService.generate_jobs(
+                jobs_commands=jobs_commands,
+                work_dir=work_dir,
+                output_dir=output_dir,
+                ram_per_job_gb=ram_per_job_gb,
+                queue=queue,
+            )
+            jobs_ids = PBSService.submit_jobs(
+                jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs
+            )
             PBSService.wait_for_jobs(jobs_ids=jobs_ids)
 
         # # remove work dir
