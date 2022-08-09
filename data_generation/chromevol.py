@@ -41,7 +41,7 @@ models = [
 most_complex_model = "_".join(
     param.name for param in [gain, loss, dupl, base_num, base_num_r, demi_dupl]
 )
-
+counts_path_template = "_dataFile = {counts_path}"
 included_parameter_template_with_func = (
     "\n_{param_name}_1 = {param_index};{param_init_value}\n_{func_name} = CONST\n"
 )
@@ -56,18 +56,21 @@ max_chr_inferred_template = "\n_maxChrInferred = {max_chr_inferred}"
 @dataclass
 class ChromevolInput:
     tree_path: str
-    counts_path: str
     output_dir: str
     input_path: str
     parameters: Dict[str, float]  # map of parameter name to its initial value
+    counts_path: Optional[str] = None  # this argument in none is case of simulations
     optimize_points_num: Union[str, int] = "10,3,1"
     optimize_iter_num: Union[str, int] = "0,2,5"
     min_chromosome_num: int = -1
     max_chromosome_num: int = -10
     num_trials: Union[str, int] = 10
     run_stochastic_mapping: bool = False
-    num_of_simulations: int = 1000
+    num_of_mappings: int = 1000
     simulate: bool = False
+    num_of_simulation_trials: int = 1000
+    num_of_simulations: int = 100
+    allowed_failed_sim_frac: float = 0.9
     tree_scaling_factor: float = 999
     states_frequencies_path: Optional[str] = None
     max_transitions_num: Optional[int] = None
@@ -123,6 +126,10 @@ class ChromevolExecutor:
                 input_string += excluded_parameter_template.format(
                     func_name=param.func_name
                 )
+        if input_args.get("counts_path", None) is not None:
+            input_string += counts_path_template.format(
+                counts_path=input_args["counts_path"]
+            )
         if input_args.get("frequencies_path", None) is not None:
             input_string += states_frequencies_template.format(
                 frequencies_path=input_args["frequencies_path"]

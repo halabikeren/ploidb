@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from collections import defaultdict
 from typing import Dict, Tuple, List, Optional, Any
 
@@ -15,6 +16,7 @@ from ete3 import Tree
 from timeit import default_timer as timer
 from datetime import timedelta
 
+from scipy import optimize
 from sklearn.metrics import matthews_corrcoef
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -170,7 +172,7 @@ class Pipeline:
             "counts_path": counts_path,
             "output_dir": work_dir,
             "run_stochastic_mapping": True,
-            "num_of_simulations": mappings_num,
+            "num_of_mappings": mappings_num,
         }
         if not optimize:
             input_args["optimize_points_num"] = 1
@@ -256,9 +258,7 @@ class Pipeline:
 
     @staticmethod
     def _get_optimal_threshold(
-        ploidy_data: pd.DataFrame,
-        for_polyploidy: bool = True,
-        upper_bound: float = 1.01,
+        ploidy_data: pd.DataFrame, for_polyploidy: bool = True, upper_bound: float = 1,
     ) -> tuple[float, float, pd.DataFrame]:
         positive_label_code = 1 if for_polyploidy else 0
         true_values = (
@@ -268,29 +268,66 @@ class Pipeline:
         )
         num_sim = len(ploidy_data.simulation.unique())
         taxon_to_frac_sim_supporting_polyploidy = defaultdict(int)
-        best_threshold, best_coeff = np.nan, -1.1
-        thresholds = [i * 0.1 for i in range(1, 11) if i * 0.1 <= upper_bound]
+        thresholds = [
+            i * 0.1
+            for i in range(4 if for_polyploidy else 0, 11)
+            if i * 0.1 <= upper_bound
+        ]
         logger.info(
             f"maximal threshold to examine  for {'polyploidy' if for_polyploidy else 'diploidy'} threshold = {thresholds[-1]} across {num_sim:,} simulations"
         )
-        for freq_threshold in thresholds:
-            predicted_values = Pipeline._get_predicted_values(
-                ploidy_data=ploidy_data,
-                for_polyploidy=for_polyploidy,
-                freq_threshold=freq_threshold,
-            )
-            coeff = matthews_corrcoef(
-                y_true=true_values, y_pred=predicted_values.astype(np.int16).tolist()
-            )
-            logger.info(
-                f"matthews correlation coefficient for {'polyploidy' if for_polyploidy else 'diploidy'} and threshold of {freq_threshold} = {coeff}"
-            )
-            for tax in predicted_values.index:
-                taxon_to_frac_sim_supporting_polyploidy[tax] += predicted_values[tax]
-            if coeff >= best_coeff:
-                if coeff > best_coeff or (coeff == best_coeff and for_polyploidy):
-                    best_threshold, best_coeff = freq_threshold, coeff
 
+        def target_func(x, args):
+            predicted_values = Pipeline._get_predicted_values(
+                ploidy_data=args["ploidy_data"],
+                for_polyploidy=args["for_polyploidy"],
+                freq_threshold=x[0],
+            )
+            coeff = np.round(
+                matthews_corrcoef(
+                    y_true=true_values,
+                    y_pred=predicted_values.astype(np.int16).tolist(),
+                ),
+                3,
+            )
+            logger.info(f"thr={x[0]}, coeff={coeff}")
+            args["memoization"][x[0]] = coeff
+            return -1 * coeff  # maximize coeff
+
+        lower_bound = 0.4 if for_polyploidy else 0
+        bounds = ((lower_bound, upper_bound),)
+        examined_thresholds = dict()
+        minimizer_kwargs = {
+            "method": "BFGS",
+            "args": {
+                "ploidy_data": ploidy_data,
+                "for_polyploidy": for_polyploidy,
+                "true_values": true_values,
+                "memoization": examined_thresholds,
+            },
+            "bounds": bounds,
+        }
+        optimized_res = optimize.basinhopping(
+            func=target_func,
+            x0=[0.8] if for_polyploidy else [0.2],
+            minimizer_kwargs=minimizer_kwargs,
+            stepsize=0.05,
+            niter_success=10,
+        )
+        best_threshold = optimized_res.x[0]
+        best_coeff = examined_thresholds[best_threshold]
+        logger.info(
+            f"threshold with best coeff = {best_threshold} (coeff={best_coeff})"
+        )
+        thresholds_with_best_coeff = [
+            thr for thr in examined_thresholds if examined_thresholds[thr] == best_coeff
+        ]
+        best_threshold = (
+            np.min(thresholds_with_best_coeff)
+            if for_polyploidy
+            else np.max(thresholds_with_best_coeff)
+        )
+        logger.info(f"final selected threshold with the same coeff = {best_threshold}")
         # compute reliability scores
         taxon_to_reliability_scores = pd.DataFrame(
             columns=[
@@ -393,14 +430,14 @@ class Pipeline:
 
     @staticmethod
     def _create_simulation_input(
-        counts_path: str,
         tree_path: str,
         model_parameters_path: str,
         work_dir: str,
         frequencies_path: str,
-        seed: int,
         min_observed_chr_count: int,
         max_observed_chr_count: int,
+        trials_num: int,
+        simulations_num: int,
     ) -> str:
         os.makedirs(work_dir, exist_ok=True)
         sm_input_path = f"{work_dir}sim_params.json"
@@ -408,11 +445,9 @@ class Pipeline:
         input_args = {
             "input_path": chromevol_input_path,
             "tree_path": tree_path,
-            "counts_path": counts_path,
             "output_dir": work_dir,
             "optimize_points_num": 1,
             "optimize_iter_num": 0,
-            "seed": seed,
             "frequencies_path": frequencies_path,
             "min_chromosome_num": 1,
             "max_chromosome_num": 200,
@@ -420,7 +455,9 @@ class Pipeline:
             "max_chr_inferred": int(max_observed_chr_count + 10),
             "simulate": True,
             "run_stochastic_mapping": False,
-            "num_of_simulations": "1",
+            "num_of_simulation_trials": trials_num,
+            "num_of_simulations": simulations_num,
+            "allowed_failed_sim_frac": 1.0 - float(simulations_num / trials_num),
         }
         with open(model_parameters_path, "r") as infile:
             selected_model_res = json.load(fp=infile)
@@ -445,6 +482,55 @@ class Pipeline:
                 outfile.write(f"{orig_frequencies.get(i, 0)}\n")
 
     @staticmethod
+    def _get_max_state_transition(evol_path: str):
+        file = open(evol_path, "r")
+        content = file.read()
+        file.close()
+        pattern_state_to_state = re.compile(
+            "from state:[\s]+([\d]+)[\s]+t[\s]+=[\s]+[\S]+[\s]+to state[\s]+=[\s]+([\d]+)"
+        )
+        states = pattern_state_to_state.findall(content)
+        max_state = 0
+        for state_from, state_to in states:
+            if int(state_from) > max_state:
+                max_state = int(state_from)
+            if int(state_to) > max_state:
+                max_state = int(state_to)
+            else:
+                continue
+        return max_state
+
+    @staticmethod
+    def _remove_unsuccessful_simulations(simulations_dir: str, max_state: int = 200):
+        sim_folders = os.listdir(simulations_dir)
+        for i in sim_folders:
+            sim_dir_i = os.path.join(simulations_dir, str(i))
+            if (not os.path.exists(sim_dir_i)) or (not os.path.isdir(sim_dir_i)):
+                continue
+            evol_path = os.path.join(sim_dir_i, "simulatedEvolutionPaths.txt")
+            if not os.path.exists(evol_path):
+                continue
+            max_state_evol = Pipeline._get_max_state_transition(evol_path)
+            if max_state_evol == max_state:
+                shutil.rmtree(sim_dir_i)
+
+    @staticmethod
+    def _pick_successful_simulations(simulations_dir: str, simulations_num: int):
+        dirs = os.listdir(simulations_dir)
+        lst_of_dirs = []
+        for file in dirs:
+            sim_i_dir = os.path.join(simulations_dir, file)
+            if not os.path.isdir(sim_i_dir):
+                continue
+            lst_of_dirs.append(int(file))
+        lst_of_dirs.sort()
+        for i in range(simulations_num):
+            curr_dir = os.path.join(simulations_dir, str(lst_of_dirs[i]))
+            dst = os.path.join(simulations_dir, str(i))
+            if i != lst_of_dirs[i]:
+                os.rename(curr_dir, dst)
+
+    @staticmethod
     def _simulate(
         tree_path: str,
         model_parameters_path: str,
@@ -453,80 +539,53 @@ class Pipeline:
         simulations_dir: str,
         trials_num: int = 1000,
         simulations_num: int = 10,
-        parallel: bool = False,
     ) -> list[str]:
         frequencies_path = f"{simulations_dir}/simulations_states_frequencies.txt"
         Pipeline._parse_simulation_frequencies(
             model_parameters_path=model_parameters_path, output_path=frequencies_path
         )
-        counts_path_to_simulations_commands = dict()
-        successful_simulations_dirs = []
-        for i in range(trials_num):
-            simulation_dir = f"{simulations_dir}/{i}/"
-            counts_path = f"{simulation_dir}/counts.fasta"
-            sm_input_path = Pipeline._create_simulation_input(
-                counts_path=counts_path,
-                tree_path=tree_path,
-                model_parameters_path=model_parameters_path,
-                work_dir=simulation_dir,
-                frequencies_path=frequencies_path,
-                seed=i,
-                min_observed_chr_count=min_observed_chr_count,
-                max_observed_chr_count=max_observed_chr_count,
-            )
+        sm_input_path = Pipeline._create_simulation_input(
+            tree_path=tree_path,
+            model_parameters_path=model_parameters_path,
+            work_dir=simulations_dir,
+            frequencies_path=frequencies_path,
+            min_observed_chr_count=min_observed_chr_count,
+            max_observed_chr_count=max_observed_chr_count,
+            trials_num=trials_num,
+            simulations_num=simulations_num,
+        )
 
-            if not os.path.exists(counts_path):
-                commands = [
-                    os.getenv("CONDA_ACT_CMD"),
-                    f"cd {simulation_dir}",
-                    f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
-                ]
-                counts_path_to_simulations_commands[counts_path] = commands
-            else:
-                simulation_dir = f"{os.path.dirname(counts_path)}/"
-                try:
-                    Pipeline._extract_ploidy_levels(simulation_dir=simulation_dir)
-                    successful_simulations_dirs.append(simulation_dir)
-                except ValueError as e:
-                    logger.info(f"simulation {i} failed with error {e}")
-                if len(successful_simulations_dirs) == simulations_num:
-                    logger.info(
-                        f"reached {simulations_num} successful simulations after {i+1} trials"
-                    )
-                    return successful_simulations_dirs
-        if not parallel:
-            trial_index = 0
-            for counts_path in counts_path_to_simulations_commands:
-                trial_index += 1
-                joined_cmd = ";".join(
-                    counts_path_to_simulations_commands[counts_path]
-                ).replace("//", "/")
-                res = os.system(joined_cmd)
-                if os.path.exists(counts_path):
-                    simulation_dir = os.path.dirname(counts_path)
-                    try:
-                        Pipeline._extract_ploidy_levels(simulation_dir=simulation_dir)
-                        successful_simulations_dirs.append(simulation_dir)
-                    except ValueError as e:
-                        logger.info(f"trial {trial_index} failed with error {e}")
-                    if len(successful_simulations_dirs) == simulations_num:
-                        logger.info(
-                            f"reached {simulations_num} successful simulations after {trial_index} trials"
-                        )
-                        return successful_simulations_dirs
-        else:
-            PBSService.execute_job_array(
-                work_dir=f"{simulations_dir}jobs/",
-                output_dir=f"{simulations_dir}jobs_output/",
-                jobs_commands=list(counts_path_to_simulations_commands.values()),
-                max_parallel_jobs=100,
-                ram_per_job_gb=1,
-            )
+        if len(os.listdir(simulations_dir)) < simulations_num:
+            commands = [
+                os.getenv("CONDA_ACT_CMD"),
+                f"cd {simulations_dir}",
+                f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
+            ]
+            joined_cmd = ";".join(commands).replace("//", "/")
+            res = os.system(joined_cmd)
+
+        Pipeline._remove_unsuccessful_simulations(
+            simulations_dir=simulations_dir, max_state=200
+        )
+        Pipeline._pick_successful_simulations(
+            simulations_dir=simulations_dir, simulations_num=simulations_num
+        )
+
+        successful_simulations_dirs = []
+        for path in os.listdir(simulations_dir):
+            try:
+                is_sim_path = int(path)
+                simulation_dir = f"{simulations_dir}{path}/"
+                Pipeline._extract_ploidy_levels(simulation_dir=simulation_dir)
+                successful_simulations_dirs.append(simulation_dir)
+            except Exception as e:
+                continue
 
         if len(successful_simulations_dirs) < simulations_num:
             raise ValueError(
                 f"after {trials_num} trials, chromevol succeeded in creating only {len(successful_simulations_dirs)} successful simulations"
             )
+
         return successful_simulations_dirs
 
     @staticmethod
@@ -579,7 +638,6 @@ class Pipeline:
         model_parameters_path: str,
         simulations_num: int = 10,
         trials_num: int = 1000,
-        parallel: bool = False,
     ) -> list[str]:
         simulations_dir = f"{self.work_dir}/simulations/"
         counts = [
@@ -595,7 +653,6 @@ class Pipeline:
             simulations_dir=simulations_dir,
             trials_num=trials_num,
             simulations_num=simulations_num,
-            parallel=parallel,
         )
         return successful_simulations
 
@@ -607,7 +664,6 @@ class Pipeline:
         mappings_num: int,
         simulations_num: int = 10,
         trials_num: int = 1000,
-        parallel: bool = False,
         debug: bool = False,
     ) -> Tuple[
         float, float, pd.DataFrame, pd.DataFrame,
@@ -618,7 +674,6 @@ class Pipeline:
             model_parameters_path=model_parameters_path,
             simulations_num=simulations_num,
             trials_num=trials_num,
-            parallel=parallel,
         )
 
         # for each one, do mappings and then extract frequencies of poly events per species
@@ -630,7 +685,7 @@ class Pipeline:
             simulations_num: f"{self.work_dir}/simulations/{simulations_num}_simulations_based_thresholds.pkl"
         }
         if debug:
-            for i in range(10, 100, 10):
+            for i in range(10, simulations_num, 10):
                 sim_num_to_thresholds_path[
                     i
                 ] = f"{self.work_dir}/simulations/{i}_simulations_based_thresholds.pkl"
@@ -785,14 +840,13 @@ class Pipeline:
         diploidity_threshold: float = 0.1,
         optimize_thresholds: bool = False,
         taxonomic_classification_data: Optional[pd.DataFrame] = None,
-        parallel: bool = False,
         debug: bool = False,
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]
         )
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
-        tree = Tree(full_tree_path)
+        tree = Tree(full_tree_path, format=1)
         taxon_name_to_count = {
             record.description.lower(): int(str(record.seq)) for record in taxa_records
         }
@@ -821,6 +875,16 @@ class Pipeline:
                 mappings_num=mappings_num,
             )
             if optimize_thresholds:
+
+                simulations_dir = f"{self.work_dir}/simulations/"
+                simulations_zip_path = f"{self.work_dir}/simulations.zip"
+                if (
+                    not os.path.exists(simulations_dir)
+                    or os.path.exists(simulations_dir)
+                    and len(os.listdir(simulations_dir)) < 10
+                ) and os.path.exists(simulations_zip_path):
+                    res = os.system(f"cd {self.work_dir}; unzip -o simulations.zip")
+
                 logger.info(f"searching for optimal thresholds based on simulations")
                 (
                     diploidity_threshold,
@@ -832,9 +896,8 @@ class Pipeline:
                     tree_path=tree_path,
                     model_parameters_path=model_parameters_path,
                     mappings_num=mappings_num,
-                    simulations_num=100 if debug else 10,
+                    simulations_num=10,
                     trials_num=1000,
-                    parallel=parallel,
                     debug=debug,
                 )
             logger.info(
@@ -869,6 +932,11 @@ class Pipeline:
             ploidy_classification["Genus"].fillna(value=taxon_to_genus, inplace=True)
             ploidy_classification["Family"].fillna(value=taxon_to_family, inplace=True)
 
+        res = os.system(
+            f"cd {os.path.dirname(self.work_dir)};zip -r simulations.zip ./simulations"
+        )
+        res = os.system(f"rm -rf {self.work_dir}simulations/")
+
         ploidy_classification.reset_index(inplace=True)
         return ploidy_classification
 
@@ -878,7 +946,7 @@ class Pipeline:
     ):
         counts = list(SeqIO.parse(counts_path, format="fasta"))
         records_with_counts = [record.description for record in counts]
-        tree = Tree(input_tree_path)
+        tree = Tree(input_tree_path, format=1)
         tree.prune(records_with_counts)
         tree.write(outfile=output_tree_path)
 
@@ -1039,7 +1107,7 @@ class Pipeline:
             "polyploid": "red",
             "diploid": "blue",
         }
-        tree = Tree(tree_path)
+        tree = Tree(tree_path, format=1)
         for leaf in tree.get_leaves():
             if ploidy_classification_data is not None:
                 try:

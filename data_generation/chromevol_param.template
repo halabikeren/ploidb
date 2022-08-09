@@ -25,4 +25,8 @@ _maxNumOfTrials = {num_trials}
 
 _simulateData = {simulate}
 _runStochasticMapping = {run_stochastic_mapping}
-_NumOfSimulations = {num_of_simulations}
+_NumOfSimulations = {num_of_mappings}
+_numOfSimulatedData = {num_of_simulation_trials}
+_numOfRequiredSimulatedData = {num_of_simulations}
+_fracAllowedFailedSimulations = {allowed_failed_sim_frac}
+_dataFile = {output_dir}

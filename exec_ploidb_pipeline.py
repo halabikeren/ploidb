@@ -132,7 +132,6 @@ def exec_ploidb_pipeline(
         model_parameters_path=best_model_results_path,
         mappings_num=1000,
         taxonomic_classification_data=taxonomic_classification,
-        parallel=parallel,
         diploidity_threshold=diploidy_threshold,
         polyploidity_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
