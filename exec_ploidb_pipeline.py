@@ -104,17 +104,11 @@ def exec_ploidb_pipeline(
 
     os.makedirs(output_dir, exist_ok=True)
     pipeline = Pipeline(work_dir=output_dir)
-    relevant_tree_path = tree_path.replace(".nwk", "_only_with_counts.nwk")
-    pipeline.prune_tree_with_counts(
-        counts_path=counts_path,
-        input_tree_path=tree_path,
-        output_tree_path=relevant_tree_path,
-    )
 
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(
         counts_path=counts_path,
-        tree_path=relevant_tree_path,
+        tree_path=tree_path,
         parallel=parallel,
         ram_per_job=ram_per_job,
     )
@@ -127,8 +121,7 @@ def exec_ploidb_pipeline(
     )
     test_ploidity_classification = pipeline.get_ploidity_classification(
         counts_path=counts_path,
-        tree_path=relevant_tree_path,
-        full_tree_path=tree_path,
+        tree_path=tree_path,
         model_parameters_path=best_model_results_path,
         mappings_num=1000,
         taxonomic_classification_data=taxonomic_classification,

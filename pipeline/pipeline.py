@@ -193,7 +193,7 @@ class Pipeline:
         tree_path: str,
         model_parameters_path: str,
         mappings_num: int = 100,
-        optimize: bool = False,
+        optimize_model: bool = False,
     ) -> list[pd.DataFrame]:
         sm_work_dir = self.work_dir
         if counts_path.startswith(f"{self.work_dir}/simulations/"):
@@ -206,7 +206,7 @@ class Pipeline:
             model_parameters_path=model_parameters_path,
             work_dir=sm_work_dir,
             mappings_num=mappings_num,
-            optimize=optimize,
+            optimize=optimize_model,
         )
         if (
             not os.path.exists(sm_output_dir)
@@ -288,7 +288,7 @@ class Pipeline:
                     y_true=true_values,
                     y_pred=predicted_values.astype(np.int16).tolist(),
                 ),
-                3,
+                len(str(num_sim)),
             )
             logger.info(f"thr={x[0]}, coeff={coeff}")
             args["memoization"][x[0]] = coeff
@@ -298,7 +298,7 @@ class Pipeline:
         bounds = ((lower_bound, upper_bound),)
         examined_thresholds = dict()
         minimizer_kwargs = {
-            "method": "BFGS",
+            "method": "SLSQP",
             "args": {
                 "ploidy_data": ploidy_data,
                 "for_polyploidy": for_polyploidy,
@@ -306,13 +306,33 @@ class Pipeline:
                 "memoization": examined_thresholds,
             },
             "bounds": bounds,
+            "tol": 1e-4,
         }
+        poly_sp = np.max(
+            [
+                0.4,
+                ploidy_data.loc[
+                    ploidy_data.is_polyploid == 1, "duplication_events_frequency"
+                ].min(),
+            ],
+        )
+        di_sp = np.min(
+            [
+                ploidy_data.loc[
+                    ploidy_data.is_polyploid == 0, "duplication_events_frequency"
+                ].max(),
+                upper_bound,
+            ]
+        )
+        logger.info(
+            f"optimizing {'poly' if for_polyploidy else 'di'}ploidy threshold with a starting point of {poly_sp if for_polyploidy else di_sp}"
+        )
         optimized_res = optimize.basinhopping(
             func=target_func,
-            x0=[0.8] if for_polyploidy else [0.2],
+            x0=[poly_sp] if for_polyploidy else [di_sp],
             minimizer_kwargs=minimizer_kwargs,
             stepsize=0.05,
-            niter_success=10,
+            niter_success=50,
         )
         best_threshold = optimized_res.x[0]
         best_coeff = examined_thresholds[best_threshold]
@@ -322,6 +342,9 @@ class Pipeline:
         thresholds_with_best_coeff = [
             thr for thr in examined_thresholds if examined_thresholds[thr] == best_coeff
         ]
+        logger.info(
+            f"other thresholds with the same coefficient = {','.join([str(np.round(thr,3)) for thr in thresholds_with_best_coeff])}"
+        )
         best_threshold = (
             np.min(thresholds_with_best_coeff)
             if for_polyploidy
@@ -358,7 +381,7 @@ class Pipeline:
         taxon_parent_node = taxon_node.up
         if taxon_parent_node is None:
             return False
-        parent_name = "-".join(taxon_parent_node.name.split("-")[:-1])
+        parent_name = taxon_parent_node.name
         if parent_name in node_to_is_polyploid and node_to_is_polyploid[parent_name]:
             return True
         taxon_parent_chromosomes_number = int(taxon_parent_node.name.split("-")[-1])
@@ -641,10 +664,13 @@ class Pipeline:
     ) -> list[str]:
         simulations_dir = f"{self.work_dir}/simulations/"
         counts = [
-            int(str(record.seq))
+            int(str(record.seq)) if str(record.seq) != "X" else np.nan
             for record in list(SeqIO.parse(orig_counts_path, format="fasta"))
         ]
-        min_observed_chr_count, max_observed_chr_count = np.min(counts), np.max(counts)
+        min_observed_chr_count, max_observed_chr_count = (
+            int(np.nanmin(counts)),
+            int(np.nanmax(counts)),
+        )
         successful_simulations = self._simulate(
             tree_path=tree_path,
             model_parameters_path=model_parameters_path,
@@ -698,7 +724,7 @@ class Pipeline:
                     tree_path=tree_path,
                     model_parameters_path=model_parameters_path,
                     mappings_num=mappings_num,
-                    optimize=True,
+                    optimize_model=True,
                 )
                 node_to_ploidy_level = pd.read_csv(
                     f"{simulation_dir}/node_to_is_polyploid.csv"
@@ -715,8 +741,12 @@ class Pipeline:
                     inplace=True,
                 )
                 node_to_ploidy_level.reset_index(inplace=True)
+                output_path = f"{simulation_dir}/mappings_frequencies.csv"
+                node_to_ploidy_level.to_csv(output_path, index=False)
+
                 node_to_ploidy_level["simulation"] = simulation_dir
                 simulations_ploidy_data.append(node_to_ploidy_level)
+
             simulations_ploidy_data = pd.concat(simulations_ploidy_data)
             simulations_ploidy_data.to_csv(simulations_ploidy_data_path, index=False)
         else:
@@ -726,51 +756,72 @@ class Pipeline:
         diploidity_threshold, polyploidity_threshold = np.nan, np.nan
         diploidy_reliability_scores, polyploidy_reliability_scores = np.nan, np.nan
         for sim_num in sim_num_to_thresholds_path:
-            logger.info(
-                f"finding optimal polyploidy and diploidy thresholds based on {sim_num} simulations"
-            )
             thresholds_path = sim_num_to_thresholds_path[sim_num]
-            (
-                polyploidity_threshold,
-                polyploidy_coeff,
-                polyploidy_reliability_scores,
-            ) = self._get_optimal_threshold(
-                ploidy_data=simulations_ploidy_data.loc[
-                    simulations_ploidy_data.simulation.isin(simulations_dirs[:sim_num])
-                ],
-                for_polyploidy=True,
-            )
+            if os.path.exists(thresholds_path):
+                with open(thresholds_path, "rb") as infile:
+                    optimal_thresholds_data = pickle.load(file=infile)
+                    polyploidity_threshold = optimal_thresholds_data[
+                        "polyploidity_threshold"
+                    ]
+                    polyploidy_reliability_scores = optimal_thresholds_data[
+                        "polyploidy_reliability_scores"
+                    ]
+                    diploidity_threshold = optimal_thresholds_data[
+                        "diploidity_threshold"
+                    ]
+                    diploidy_reliability_scores = optimal_thresholds_data[
+                        "diploidy_reliability_scores"
+                    ]
 
-            logger.info(
-                f"optimal polyploidy threshold = {polyploidity_threshold} (with coeff={polyploidy_coeff})"
-            )
+            else:
+                logger.info(
+                    f"finding optimal polyploidy and diploidy thresholds based on {sim_num} simulations"
+                )
+                (
+                    polyploidity_threshold,
+                    polyploidy_coeff,
+                    polyploidy_reliability_scores,
+                ) = self._get_optimal_threshold(
+                    ploidy_data=simulations_ploidy_data.loc[
+                        simulations_ploidy_data.simulation.isin(
+                            simulations_dirs[:sim_num]
+                        )
+                    ],
+                    for_polyploidy=True,
+                )
 
-            (
-                diploidity_threshold,
-                diploidy_coeff,
-                diploidy_reliability_scores,
-            ) = self._get_optimal_threshold(
-                ploidy_data=simulations_ploidy_data.loc[
-                    simulations_ploidy_data.simulation.isin(simulations_dirs[:sim_num])
-                ],
-                for_polyploidy=False,
-                upper_bound=polyploidity_threshold,
-            )
+                logger.info(
+                    f"optimal polyploidy threshold = {polyploidity_threshold} (with coeff={polyploidy_coeff})"
+                )
 
-            logger.info(
-                f"optimal diploidy threshold = {diploidity_threshold} (with coeff={diploidy_coeff})"
-            )
+                (
+                    diploidity_threshold,
+                    diploidy_coeff,
+                    diploidy_reliability_scores,
+                ) = self._get_optimal_threshold(
+                    ploidy_data=simulations_ploidy_data.loc[
+                        simulations_ploidy_data.simulation.isin(
+                            simulations_dirs[:sim_num]
+                        )
+                    ],
+                    for_polyploidy=False,
+                    upper_bound=polyploidity_threshold,
+                )
 
-            optimal_thresholds = {
-                "diploidity_threshold": diploidity_threshold,
-                "diploidity_coeff": diploidy_coeff,
-                "polyploidity_threshold": polyploidity_threshold,
-                "polyploidity_coeff": polyploidy_coeff,
-                "diploidy_reliability_scores": diploidy_reliability_scores,
-                "polyploidy_reliability_scores": polyploidy_reliability_scores,
-            }
-            with open(thresholds_path, "wb") as outfile:
-                pickle.dump(obj=optimal_thresholds, file=outfile)
+                logger.info(
+                    f"optimal diploidy threshold = {diploidity_threshold} (with coeff={diploidy_coeff})"
+                )
+
+                optimal_thresholds = {
+                    "diploidity_threshold": diploidity_threshold,
+                    "diploidity_coeff": diploidy_coeff,
+                    "polyploidity_threshold": polyploidity_threshold,
+                    "polyploidity_coeff": polyploidy_coeff,
+                    "diploidy_reliability_scores": diploidy_reliability_scores,
+                    "polyploidy_reliability_scores": polyploidy_reliability_scores,
+                }
+                with open(thresholds_path, "wb") as outfile:
+                    pickle.dump(obj=optimal_thresholds, file=outfile)
 
             if sim_num == simulations_num:
                 with open(thresholds_path, "rb") as infile:
@@ -791,20 +842,50 @@ class Pipeline:
     ) -> pd.DataFrame:
         all_mappings = pd.concat(mappings)
         taxon_to_polyploidy_support = (
-            all_mappings[["NODE", "is_polyploid"]]
+            all_mappings[["NODE", "is_polyploid", "inferred_is_polyploid"]]
             .groupby("NODE")
-            .apply(lambda labels: np.sum(labels) / len(labels.dropna()))
+            .agg(
+                {
+                    "is_polyploid": lambda labels: np.sum(labels)
+                    / len(labels.dropna()),
+                    "inferred_is_polyploid": lambda labels: np.sum(labels)
+                    / len(labels.dropna()),
+                }
+            )
             .reset_index()
-            .rename(columns={"is_polyploid": "polyploidy_frequency",})
+            .rename(
+                columns={
+                    "is_polyploid": "polyploidy_frequency",
+                    "inferred_is_polyploid": "inferred_polyploidy_frequency",
+                }
+            )
         )
+        taxon_to_polyploidy_support.set_index("NODE", inplace=True)
+        taxon_to_polyploidy_support["polyploidy_frequency"].fillna(
+            value=taxon_to_polyploidy_support[
+                "inferred_polyploidy_frequency"
+            ].to_dict(),
+            inplace=True,
+        )
+        taxon_to_polyploidy_support.reset_index(inplace=True)
+
         return taxon_to_polyploidy_support
 
-    @staticmethod
     def _get_frequency_based_ploidity_classification(
+        self,
         mappings: list[pd.DataFrame],
         polyploidity_threshold: float = 0.9,
         diploidity_threshold: float = 0.1,
     ) -> dict[str, int]:  # 0 - diploid, 1 - polyploid, np.nan - unable to determine
+
+        tree_with_internal_names_path = (
+            f"{self.work_dir}/simulations/0/simulatedDataAncestors.tree"
+        )
+        full_tree = Tree(tree_with_internal_names_path, format=1)
+        for node in full_tree.traverse():
+            if "-" in node.name:
+                node.name = "-".join(node.name.split("-")[:-1])
+
         taxon_to_polyploidy_support = Pipeline._get_frequency_of_duplication_events(
             mappings=mappings
         )
@@ -814,6 +895,47 @@ class Pipeline:
         )
         taxon_to_polyploidy_support["is_diploid"] = (
             taxon_to_polyploidy_support["polyploidy_frequency"] <= diploidity_threshold
+        )
+
+        # now add ploidy inference by parent
+        in_between_names = taxon_to_polyploidy_support.loc[
+            (~taxon_to_polyploidy_support.is_polyploid)
+            & (~taxon_to_polyploidy_support.is_diploid),
+            "NODE",
+        ].tolist()
+        taxon_to_polyploidy_support.loc[
+            taxon_to_polyploidy_support.NODE.isin(in_between_names), "is_polyploid"
+        ] = np.nan
+        taxon_to_polyploidy_support.loc[
+            taxon_to_polyploidy_support.NODE.isin(in_between_names), "is_diploid"
+        ] = np.nan
+
+        node_to_is_polyploid = taxon_to_polyploidy_support.set_index("NODE")[
+            "is_polyploid"
+        ].to_dict()
+
+        def complement_ploidy_inference_by_parent(taxon: str) -> bool:
+            taxon_node = [
+                l
+                for l in full_tree.traverse()
+                if l.name.lower().startswith(taxon.lower())
+            ][0]
+            taxon_parent_node = taxon_node.up
+            if taxon_parent_node is None:
+                return np.nan
+            parent_name = taxon_parent_node.name
+            parent_ploidy_level = node_to_is_polyploid.get(parent_name, np.nan)
+            taxon_ploidy_level = (
+                parent_ploidy_level if parent_ploidy_level == 1 else np.nan
+            )
+            return taxon_ploidy_level
+
+        taxon_to_polyploidy_support.loc[
+            taxon_to_polyploidy_support.is_polyploid.isna(), "is_polyploid"
+        ] = taxon_to_polyploidy_support.loc[
+            taxon_to_polyploidy_support.is_polyploid.isna(), "NODE"
+        ].apply(
+            complement_ploidy_inference_by_parent
         )
 
         taxon_to_polyploidy_support[
@@ -833,7 +955,6 @@ class Pipeline:
         self,
         counts_path: str,
         tree_path: str,
-        full_tree_path: str,
         model_parameters_path: str,
         mappings_num: int = 1000,
         polyploidity_threshold: float = 0.9,
@@ -846,11 +967,16 @@ class Pipeline:
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]
         )
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
-        tree = Tree(full_tree_path, format=1)
+        tree = Tree(tree_path)
         taxon_name_to_count = {
-            record.description.lower(): int(str(record.seq)) for record in taxa_records
+            record.description.lower(): int(str(record.seq))
+            if str(record.seq) != "X"
+            else np.nan
+            for record in taxa_records
         }
-        ploidy_classification["Taxon"] = pd.Series(tree.get_leaf_names()).str.lower()
+        ploidy_classification["Taxon"] = pd.Series(
+            [n.name.lower() for n in tree.traverse()]
+        )
         ploidy_classification["Chromosome count"] = ploidy_classification[
             "Taxon"
         ].apply(lambda name: taxon_name_to_count.get(name, "x"))
@@ -903,7 +1029,7 @@ class Pipeline:
             logger.info(
                 f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings"
             )
-            taxon_to_ploidy_classification = Pipeline._get_frequency_based_ploidity_classification(
+            taxon_to_ploidy_classification = self._get_frequency_based_ploidity_classification(
                 mappings=mappings,
                 polyploidity_threshold=polyploidity_threshold,
                 diploidity_threshold=diploidity_threshold,
@@ -922,12 +1048,8 @@ class Pipeline:
 
         if taxonomic_classification_data is not None:
             taxon_to_genus, taxon_to_family = (
-                taxonomic_classification_data.set_index("corrected_resolved_name")[
-                    "genus"
-                ].to_dict(),
-                taxonomic_classification_data.set_index("corrected_resolved_name")[
-                    "family"
-                ].to_dict(),
+                taxonomic_classification_data.set_index("taxon")["genus"].to_dict(),
+                taxonomic_classification_data.set_index("taxon")["family"].to_dict(),
             )
             ploidy_classification["Genus"].fillna(value=taxon_to_genus, inplace=True)
             ploidy_classification["Family"].fillna(value=taxon_to_family, inplace=True)
@@ -938,17 +1060,10 @@ class Pipeline:
         res = os.system(f"rm -rf {self.work_dir}simulations/")
 
         ploidy_classification.reset_index(inplace=True)
+        ploidy_classification["Chromosome count"].fillna("x", inplace=True)
+        ploidy_classification["Taxon"].replace({"": np.nan}, inplace=True)
+        ploidy_classification.dropna(subset=["Taxon"], inplace=True)
         return ploidy_classification
-
-    @staticmethod
-    def prune_tree_with_counts(
-        counts_path: str, input_tree_path: str, output_tree_path: str
-    ):
-        counts = list(SeqIO.parse(counts_path, format="fasta"))
-        records_with_counts = [record.description for record in counts]
-        tree = Tree(input_tree_path, format=1)
-        tree.prune(records_with_counts)
-        tree.write(outfile=output_tree_path)
 
     @staticmethod
     def parse_classification_data(
