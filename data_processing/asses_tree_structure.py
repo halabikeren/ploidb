@@ -50,7 +50,18 @@ logger = logging.getLogger(__name__)
     required=True,
 )
 @click.option(
-    "--batch_num", help="batches number", type=int, required=False, default=100
+    "--queue",
+    help="queue to submit jobs to",
+    type=str,
+    required=False,
+    default="itaym",
+)
+@click.option(
+    "--batch_num",
+    help="number of batches to divide instances to",
+    type=int,
+    required=False,
+    default=100,
 )
 def asses_tree(
     tree_path: str,
@@ -60,6 +71,7 @@ def asses_tree(
     log_path: str,
     batch_num: int,
     output_path: str,
+    queue: str,
 ):
 
     logging.basicConfig(
@@ -108,6 +120,7 @@ def asses_tree(
             work_dir=f"{work_dir}/jobs/",
             output_dir=f"{work_dir}/jobs_output/",
             jobs_commands=jobs_commands,
+            queue=queue,
         )
 
     logger.info(

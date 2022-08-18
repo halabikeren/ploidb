@@ -91,14 +91,18 @@ class PBSService:
         return jobs_paths
 
     @staticmethod
-    def submit_jobs(jobs_paths: List[str], max_parallel_jobs: int = 30):
+    def submit_jobs(
+        jobs_paths: List[str], max_parallel_jobs: int = 30, queue: str = "itaym"
+    ):
         job_index = 0
         jobs_ids = []
         while job_index < len(jobs_paths):
             while PBSService.compute_curr_jobs_num() > max_parallel_jobs:
                 sleep(2 * 60)
             try:
-                res = subprocess.check_output(["qsub", f"{jobs_paths[job_index]}"])
+                res = subprocess.check_output(
+                    ["qsub", "-q", queue, f"{jobs_paths[job_index]}"]
+                )
                 jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
                 job_index += 1
             except Exception as e:
@@ -149,7 +153,7 @@ class PBSService:
                 queue=queue,
             )
             jobs_ids = PBSService.submit_jobs(
-                jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs
+                jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs, queue=queue
             )
             PBSService.wait_for_jobs(jobs_ids=jobs_ids)
 

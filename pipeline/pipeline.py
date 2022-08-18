@@ -95,6 +95,7 @@ class Pipeline:
         tree_path: str,
         parallel: bool = False,
         ram_per_job: int = 1,
+        queue: str = "itaym",
     ) -> str:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
@@ -122,15 +123,16 @@ class Pipeline:
         )
         if len(jobs_commands) > 0:
             if parallel:
-                # PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/")
+                # PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/", queue=queue)
                 jobs_paths = PBSService.generate_jobs(
                     jobs_commands=jobs_commands,
                     work_dir=f"{model_selection_work_dir}jobs/",
                     output_dir=f"{model_selection_work_dir}jobs_output/",
                     ram_per_job_gb=ram_per_job,
+                    queue=queue,
                 )
                 jobs_ids = PBSService.submit_jobs(
-                    jobs_paths=jobs_paths, max_parallel_jobs=10000
+                    jobs_paths=jobs_paths, max_parallel_jobs=1000, queue=queue
                 )  # make sure to always submit these jobs
                 res = os.system(most_complex_model_cmd)
                 PBSService.wait_for_jobs(jobs_ids=jobs_ids)
@@ -965,6 +967,7 @@ class Pipeline:
         optimize_thresholds: bool = False,
         taxonomic_classification_data: Optional[pd.DataFrame] = None,
         debug: bool = False,
+        queue: str = "ita",
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]

@@ -80,6 +80,13 @@ logger = logging.getLogger(__name__)
     required=False,
     default=0.9,
 )
+@click.option(
+    "--queue",
+    help="queue to submit jobs to",
+    type=str,
+    required=False,
+    default="itaym",
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -91,6 +98,7 @@ def exec_ploidb_pipeline(
     optimize_thresholds: bool,
     diploidy_threshold: float,
     polyploidy_threshold: float,
+    queue: str,
 ):
 
     logging.basicConfig(
@@ -111,6 +119,7 @@ def exec_ploidb_pipeline(
         tree_path=tree_path,
         parallel=parallel,
         ram_per_job=ram_per_job,
+        queue=queue,
     )
 
     logger.info(f"searching for optimal classification thresholds")
@@ -129,6 +138,7 @@ def exec_ploidb_pipeline(
         polyploidity_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
         debug=False,
+        queue=queue,
     )
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(
