@@ -846,10 +846,13 @@ class Pipeline:
             .groupby("NODE")
             .agg(
                 {
-                    "is_polyploid": lambda labels: np.sum(labels)
-                    / len(labels.dropna()),
+                    "is_polyploid": lambda labels: np.sum(labels) / len(labels.dropna())
+                    if len(labels.dropna()) > 0
+                    else np.nan,
                     "inferred_is_polyploid": lambda labels: np.sum(labels)
-                    / len(labels.dropna()),
+                    / len(labels.dropna())
+                    if len(labels.dropna()) > 0
+                    else np.nan,
                 }
             )
             .reset_index()
