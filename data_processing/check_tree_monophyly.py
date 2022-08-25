@@ -16,7 +16,9 @@ def add_group_by_property(
 ):
     taxon_to_class = classification_data.set_index("taxon")[class_name].to_dict()
     for node in tree.get_leaves():
-        node_class = taxon_to_class[node.name]
+        node_class = taxon_to_class.get(node.name, np.nan)
+        if class_name == "genus" and pd.isna(node_class):
+            node_class = node.name.split(" ")[0]
         node.add_feature(pr_name=class_name, pr_value=node_class)
 
 
