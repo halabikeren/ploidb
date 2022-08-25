@@ -71,6 +71,7 @@ class PBSService:
         output_dir: str,
         ram_per_job_gb: int = 2,
         queue: str = "itaym",
+        priority: int = 0,
     ) -> List[str]:
         jobs_paths, job_output_paths = [], []
         for i in range(len(jobs_commands)):
@@ -84,6 +85,7 @@ class PBSService:
                 commands=[os.environ.get("CONDA_ACT_CMD", "")] + jobs_commands[i],
                 ram_gb_size=ram_per_job_gb,
                 queue=queue,
+                priority=priority,
             )
             jobs_paths.append(job_path)
             job_output_paths.append(job_output_path)
@@ -139,6 +141,7 @@ class PBSService:
         max_parallel_jobs: int = 1900,
         ram_per_job_gb: int = 2,
         queue: str = "itaym",
+        priority: int = 0,
     ):
         os.makedirs(work_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
@@ -151,6 +154,7 @@ class PBSService:
                 output_dir=output_dir,
                 ram_per_job_gb=ram_per_job_gb,
                 queue=queue,
+                priority=priority,
             )
             jobs_ids = PBSService.submit_jobs(
                 jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs, queue=queue
