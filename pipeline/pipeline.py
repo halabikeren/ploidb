@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 from collections import defaultdict
-from typing import Dict, Tuple, List, Optional, Any
+from typing import Dict, Tuple, List, Optional
 
 import numpy as np
 import pandas as pd
