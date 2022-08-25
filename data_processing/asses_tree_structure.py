@@ -61,7 +61,17 @@ logger = logging.getLogger(__name__)
     help="number of batches to divide instances to",
     type=int,
     required=False,
+    default=400,
+)
+@click.option(
+    "--job_num_limit",
+    help="number of job to submit at the same time",
+    type=int,
+    required=False,
     default=100,
+)
+@click.option(
+    "--priority", help="jobs priority", type=int, required=False, default=-1,
 )
 def asses_tree(
     tree_path: str,
@@ -72,6 +82,8 @@ def asses_tree(
     batch_num: int,
     output_path: str,
     queue: str,
+    job_num_limit: int,
+    priority: int,
 ):
 
     logging.basicConfig(
@@ -121,6 +133,9 @@ def asses_tree(
             output_dir=f"{work_dir}/jobs_output/",
             jobs_commands=jobs_commands,
             queue=queue,
+            ram_per_job_gb=1,
+            max_parallel_jobs=job_num_limit,
+            priority=priority,
         )
 
     logger.info(
