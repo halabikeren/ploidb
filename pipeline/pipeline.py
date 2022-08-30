@@ -269,7 +269,6 @@ class Pipeline:
             .tolist()
         )
         num_sim = len(ploidy_data.simulation.unique())
-        taxon_to_frac_sim_supporting_polyploidy = defaultdict(int)
         thresholds = [
             i * 0.1
             for i in range(4 if for_polyploidy else 0, 11)
@@ -362,10 +361,27 @@ class Pipeline:
             ]
         )
 
+        def get_sim_support_of_ploidy(node: str, ploidy_state: int) -> float:
+            num_supporting_sim = len(
+                ploidy_data.loc[
+                    (ploidy_data.node == node)
+                    & (ploidy_data.is_polyploid == ploidy_state),
+                    "simulation",
+                ].unique()
+            )
+            num_sim = len(ploidy_data.simulation.unique())
+            return num_supporting_sim / num_sim
+
         taxon_to_reliability_scores["node"] = ploidy_data.node.unique()
-        taxon_to_reliability_scores.set_index("node", inplace=True)
-        taxon_to_reliability_scores["frac_sim_supporting_polyploidy"].fillna(
-            value=taxon_to_frac_sim_supporting_polyploidy, inplace=True
+        taxon_to_reliability_scores[
+            f"frac_sim_supporting_polyploidy"
+        ] = taxon_to_reliability_scores["node"].apply(
+            lambda node: get_sim_support_of_ploidy(node, ploidy_state=1)
+        )
+        taxon_to_reliability_scores[
+            f"frac_sim_supporting_diploidy"
+        ] = taxon_to_reliability_scores["node"].apply(
+            lambda node: get_sim_support_of_ploidy(node, ploidy_state=0)
         )
         taxon_to_reliability_scores.reset_index(inplace=True)
         return best_threshold, best_coeff, taxon_to_reliability_scores
@@ -967,7 +983,7 @@ class Pipeline:
         optimize_thresholds: bool = False,
         taxonomic_classification_data: Optional[pd.DataFrame] = None,
         debug: bool = False,
-        queue: str = "ita",
+        queue: str = "itaym",
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]
@@ -1040,14 +1056,51 @@ class Pipeline:
                 polyploidity_threshold=polyploidity_threshold,
                 diploidity_threshold=diploidity_threshold,
             )
+
             corrected_taxon_to_ploidy_classification = {
                 taxon.replace("_", " "): taxon_to_ploidy_classification[taxon]
                 for taxon in taxon_to_ploidy_classification
             }
+
             ploidy_classification.set_index("Taxon", inplace=True)
             ploidy_classification["Ploidy inference"].fillna(
                 value=corrected_taxon_to_ploidy_classification, inplace=True
             )
+
+            if optimize_thresholds:
+                poly_to_support = polyploidy_reliability_scores.set_index("node")[
+                    "frac_sim_supporting_polyploidy"
+                ].to_dict()
+                di_to_support = diploidity_reliability_scores.set_index("node")[
+                    "frac_sim_supporting_diploidy"
+                ].to_dict()
+                taxon_to_ploidy_classification_support = {}
+                for taxon in corrected_taxon_to_ploidy_classification:
+                    label = taxon_to_ploidy_classification[taxon]
+                    support = np.nan
+                    if label == 1:
+                        print(
+                            f"taxon={taxon}, polyploidy_reliability_scores.columns={polyploidy_reliability_scores.columns}"
+                        )
+                        support = poly_to_support.get(taxon, np.nan)
+                        if pd.isna(support):
+                            logger.info(
+                                f"taxon {taxon} has no support value for diploidy"
+                            )
+                    elif label == 0:
+                        print(taxon)
+                        support = di_to_support.get(taxon, np.nan)
+                        if pd.isna(support):
+                            logger.info(
+                                f"taxon {taxon} has no support value for diploidy"
+                            )
+                    taxon_to_ploidy_classification_support[
+                        taxon.replace("_", " ")
+                    ] = support
+                ploidy_classification["Ploidy inference support"] = np.nan
+                ploidy_classification["Ploidy inference support"].fillna(
+                    value=taxon_to_ploidy_classification_support, inplace=True
+                )
         logger.info(
             f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification"
         )
