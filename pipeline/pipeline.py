@@ -967,7 +967,7 @@ class Pipeline:
             else (0 if record.is_diploid else np.nan),
             axis=1,
         )
-        taxon_to_polyploidy_support.NODE = taxon_to_polyploidy_support.NODE.str.lower()
+        taxon_to_polyploidy_support.NODE = taxon_to_polyploidy_support.NODE
         return taxon_to_polyploidy_support.set_index("NODE")[
             "ploidy_inference"
         ].to_dict()
@@ -983,22 +983,19 @@ class Pipeline:
         optimize_thresholds: bool = False,
         taxonomic_classification_data: Optional[pd.DataFrame] = None,
         debug: bool = False,
-        queue: str = "itaym",
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(
             columns=["Taxon", "Genus", "Family", "Ploidy inference"]
         )
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
-        tree = Tree(tree_path)
+        tree = Tree(tree_path, format=1)
         taxon_name_to_count = {
-            record.description.lower(): int(str(record.seq))
+            record.description: int(str(record.seq))
             if str(record.seq) != "X"
             else np.nan
             for record in taxa_records
         }
-        ploidy_classification["Taxon"] = pd.Series(
-            [n.name.lower() for n in tree.traverse()]
-        )
+        ploidy_classification["Taxon"] = pd.Series([n.name for n in tree.traverse()])
         ploidy_classification["Chromosome count"] = ploidy_classification[
             "Taxon"
         ].apply(lambda name: taxon_name_to_count.get(name, "x"))
@@ -1044,7 +1041,7 @@ class Pipeline:
                     tree_path=tree_path,
                     model_parameters_path=model_parameters_path,
                     mappings_num=mappings_num,
-                    simulations_num=10,
+                    simulations_num=100 if debug else 10,
                     trials_num=1000,
                     debug=debug,
                 )
@@ -1057,14 +1054,9 @@ class Pipeline:
                 diploidity_threshold=diploidity_threshold,
             )
 
-            corrected_taxon_to_ploidy_classification = {
-                taxon.replace("_", " "): taxon_to_ploidy_classification[taxon]
-                for taxon in taxon_to_ploidy_classification
-            }
-
             ploidy_classification.set_index("Taxon", inplace=True)
             ploidy_classification["Ploidy inference"].fillna(
-                value=corrected_taxon_to_ploidy_classification, inplace=True
+                value=taxon_to_ploidy_classification, inplace=True
             )
 
             if optimize_thresholds:
@@ -1075,28 +1067,22 @@ class Pipeline:
                     "frac_sim_supporting_diploidy"
                 ].to_dict()
                 taxon_to_ploidy_classification_support = {}
-                for taxon in corrected_taxon_to_ploidy_classification:
+                for taxon in taxon_to_ploidy_classification:
                     label = taxon_to_ploidy_classification[taxon]
                     support = np.nan
                     if label == 1:
-                        print(
-                            f"taxon={taxon}, polyploidy_reliability_scores.columns={polyploidy_reliability_scores.columns}"
-                        )
                         support = poly_to_support.get(taxon, np.nan)
                         if pd.isna(support):
                             logger.info(
                                 f"taxon {taxon} has no support value for diploidy"
                             )
                     elif label == 0:
-                        print(taxon)
                         support = di_to_support.get(taxon, np.nan)
                         if pd.isna(support):
                             logger.info(
                                 f"taxon {taxon} has no support value for diploidy"
                             )
-                    taxon_to_ploidy_classification_support[
-                        taxon.replace("_", " ")
-                    ] = support
+                    taxon_to_ploidy_classification_support[taxon] = support
                 ploidy_classification["Ploidy inference support"] = np.nan
                 ploidy_classification["Ploidy inference support"].fillna(
                     value=taxon_to_ploidy_classification_support, inplace=True
@@ -1110,15 +1096,19 @@ class Pipeline:
                 taxonomic_classification_data.set_index("taxon")["genus"].to_dict(),
                 taxonomic_classification_data.set_index("taxon")["family"].to_dict(),
             )
-            ploidy_classification["Genus"].fillna(value=taxon_to_genus, inplace=True)
-            ploidy_classification["Family"].fillna(value=taxon_to_family, inplace=True)
+            ploidy_classification.reset_index(inplace=True)
+            ploidy_classification["Genus"] = ploidy_classification.Taxon.apply(
+                lambda name: taxon_to_genus.get(name.lower().replace("_", " "), np.nan)
+            )
+            ploidy_classification["Family"] = ploidy_classification.Taxon.apply(
+                lambda name: taxon_to_family.get(name.lower().replace("_", " "), np.nan)
+            )
 
         res = os.system(
             f"cd {os.path.dirname(self.work_dir)};zip -r simulations.zip ./simulations"
         )
         res = os.system(f"rm -rf {self.work_dir}simulations/")
 
-        ploidy_classification.reset_index(inplace=True)
         ploidy_classification["Chromosome count"].fillna("x", inplace=True)
         ploidy_classification["Taxon"].replace({"": np.nan}, inplace=True)
         ploidy_classification.dropna(subset=["Taxon"], inplace=True)
@@ -1198,22 +1188,16 @@ class Pipeline:
                         line.replace(taxon_name_with_chromosome_count, taxon_name)
                     )
                     chrom_tag = "<chrom> - </chrom>\n"
-                    if (
-                        taxon_name.lower().replace("_", " ")
-                        in taxon_to_chromosome_count
-                    ):
-                        chrom_tag = f"<chrom>{str(taxon_to_chromosome_count.get(taxon_name.lower().replace('_', ' '), 'x')).replace('x', ' - ')}</chrom>\n"
+                    if taxon_name in taxon_to_chromosome_count:
+                        chrom_tag = f"<chrom>{str(taxon_to_chromosome_count.get(taxon_name, 'x')).replace('x', ' - ')}</chrom>\n"
                     phylo_out.write(chrom_tag)
-                    if taxon_name.lower().replace("_", " ") in taxon_to_ploidy_colortag:
+                    if taxon_name in taxon_to_ploidy_colortag:
                         phylo_out.write(
-                            f"<colortag>{taxon_to_ploidy_colortag[taxon_name.lower().replace('_', ' ')]}</colortag>\n"
+                            f"<colortag>{taxon_to_ploidy_colortag[taxon_name]}</colortag>\n"
                         )
-                    if (
-                        taxon_name.lower().replace("_", " ")
-                        in taxon_to_ploidy_class_name
-                    ):
+                    if taxon_name in taxon_to_ploidy_class_name:
                         phylo_out.write(
-                            f"<ploidy>{taxon_to_ploidy_class_name[taxon_name.lower().replace('_', ' ')]}</ploidy>\n"
+                            f"<ploidy>{taxon_to_ploidy_class_name[taxon_name]}</ploidy>\n"
                         )
                 elif "<branch_length>" in line:
                     phylo_out.write(line)
@@ -1230,14 +1214,12 @@ class Pipeline:
     @staticmethod
     def _write_init_phyloxml_tree(newick_path: str, phyloxml_path: str):
         tree = Tree(newick_path, format=1)
-        for leaf in tree.get_leaves():
-            leaf.name = leaf.name.replace(" ", "_")
         tree.write(outfile=newick_path)
         Phylo.convert(newick_path, "newick", phyloxml_path, "phyloxml")
 
         # correct names
         for leaf in tree.get_leaves():
-            leaf.name = leaf.name.replace("_", " ")
+            leaf.name = leaf.name
         tree.write(outfile=newick_path)
 
     @staticmethod
@@ -1287,8 +1269,7 @@ class Pipeline:
                 try:
                     ploidy_status = (
                         ploidy_classification_data.loc[
-                            ploidy_classification_data.Taxon.str.lower()
-                            == leaf.name.lower().replace("_", " "),
+                            ploidy_classification_data.Taxon == leaf.name,
                             "Ploidy inference",
                         ]
                         .dropna()

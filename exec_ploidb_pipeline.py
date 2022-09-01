@@ -138,7 +138,6 @@ def exec_ploidb_pipeline(
         polyploidity_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
         debug=False,
-        queue=queue,
     )
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(
