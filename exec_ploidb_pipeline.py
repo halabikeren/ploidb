@@ -87,6 +87,13 @@ logger = logging.getLogger(__name__)
     required=False,
     default="itaym",
 )
+@click.option(
+    "--debug_sim_num",
+    help="indicator weather simulations based threshold optimization should be debugged or not",
+    type=bool,
+    required=False,
+    default=False,
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -99,6 +106,7 @@ def exec_ploidb_pipeline(
     diploidy_threshold: float,
     polyploidy_threshold: float,
     queue: str,
+    debug_sim_num: bool,
 ):
 
     logging.basicConfig(
@@ -137,7 +145,7 @@ def exec_ploidb_pipeline(
         diploidity_threshold=diploidy_threshold,
         polyploidity_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
-        debug=False,
+        debug=debug_sim_num,
     )
     test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
     pipeline.write_labeled_phyloxml_tree(
