@@ -116,6 +116,9 @@ def exec_ploidb_pipeline(
         force=True,  # run over root logger settings to enable simultaneous writing to both stdout and file handler
     )
 
+    res = os.system(f"dos2unix {counts_path}")
+    res = os.system(f"dos2unix {tree_path}")
+
     start_time = timer()
 
     os.makedirs(output_dir, exist_ok=True)
