@@ -94,6 +94,13 @@ logger = logging.getLogger(__name__)
     required=False,
     default=False,
 )
+@click.option(
+    "--max_parallel_jobs",
+    help="maximal jobs to submit at the same time from the parent process",
+    type=int,
+    required=False,
+    default=1000,
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -107,6 +114,7 @@ def exec_ploidb_pipeline(
     polyploidy_threshold: float,
     queue: str,
     debug_sim_num: bool,
+    max_parallel_jobs: int,
 ):
 
     logging.basicConfig(
@@ -122,15 +130,16 @@ def exec_ploidb_pipeline(
     start_time = timer()
 
     os.makedirs(output_dir, exist_ok=True)
-    pipeline = Pipeline(work_dir=output_dir)
+    pipeline = Pipeline(work_dir=output_dir,
+                        parallel=parallel,
+                        ram_per_job=ram_per_job,
+                        queue=queue,
+                        max_parallel_jobs=max_parallel_jobs)
 
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(
         counts_path=counts_path,
         tree_path=tree_path,
-        parallel=parallel,
-        ram_per_job=ram_per_job,
-        queue=queue,
     )
 
     logger.info(f"searching for optimal classification thresholds")
