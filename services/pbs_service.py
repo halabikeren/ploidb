@@ -93,9 +93,39 @@ class PBSService:
         return jobs_paths
 
     @staticmethod
+    def retry_memory_failures(jobs_paths: list[str], jobs_output_dir: str) -> list[str]:
+        jobs_ids = []
+        mem_re = re.compile("mem=(\d*)gb")
+        for job_path in jobs_paths:
+            job_output_path = f"{jobs_output_dir}/{os.path.basename(job_path).replace('.sh', '.out')}"
+            if not os.path.exists(job_output_path):
+                res = subprocess.check_output(
+                    ["qsub", f"{job_path}"]
+                )
+                jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
+            else:
+                with open(job_output_path, "r") as f:
+                    c = f.read()
+                if "PBS: job killed: mem" in c:
+                    with open(job_path, "r") as jf:
+                        jc = jf.read()
+                    mem = int(mem_re.search(jc).group(1))
+                    new_mem = mem * 2
+                    jc = jc.replace(f"{mem}gb", f"{new_mem}gb")
+                    with open(job_path, "w") as jf:
+                        jf.write(jc)
+                    res = subprocess.check_output(
+                        ["qsub", f"{job_path}"]
+                    )
+                    jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
+            if os.path.exists(job_output_path):
+                os.remove(job_output_path)
+        return jobs_ids
+
+    @staticmethod
     def submit_jobs(
         jobs_paths: List[str], max_parallel_jobs: int = 30, queue: str = "itaym"
-    ):
+    ) -> list[str]:
         job_index = 0
         jobs_ids = []
         while job_index < len(jobs_paths):
@@ -159,7 +189,11 @@ class PBSService:
             jobs_ids = PBSService.submit_jobs(
                 jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs, queue=queue
             )
-            PBSService.wait_for_jobs(jobs_ids=jobs_ids)
+            done = False
+            while not done:
+                PBSService.wait_for_jobs(jobs_ids=jobs_ids)
+                job_ids = PBSService.retry_memory_failures(jobs_paths=jobs_paths, jobs_output_dir=output_dir)
+                done = (len(job_ids) == 0)
 
         # # remove work dir
         # shutil.rmtree(work_dir, ignore_errors=True)
