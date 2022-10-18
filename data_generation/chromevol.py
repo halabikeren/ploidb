@@ -11,7 +11,6 @@ import pandas as pd
 import pickle
 
 from dotenv import load_dotenv, find_dotenv
-
 load_dotenv(find_dotenv())
 
 import logging
