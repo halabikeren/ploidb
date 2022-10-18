@@ -2,7 +2,6 @@ import json
 import os
 import re
 import shutil
-from collections import defaultdict
 from typing import Dict, Tuple, List, Optional
 
 import numpy as np
@@ -35,15 +34,90 @@ logger = logging.getLogger(__name__)
 
 class Pipeline:
     work_dir: str
+    parallel: bool
+    ram_per_job: int
+    queue: str
+    max_parallel_jobs: int
 
-    def __init__(self, work_dir: str = f"{os.getcwd()}/ploidb_pipeline/"):
+    def __init__(self,
+                 work_dir: str = f"{os.getcwd()}/ploidb_pipeline/",
+                 parallel: bool = False,
+                 ram_per_job: int = 1,
+                 queue: str = "itaym",
+                 max_parallel_jobs: int = 1000,
+                ):
         self.work_dir = work_dir
         os.makedirs(self.work_dir, exist_ok=True)
+        self.parallel = parallel
+        self.ram_per_job = ram_per_job
+        self.queue = queue
+        self.max_parallel_jobs = max_parallel_jobs
+
+    def _send_chromevol_commands(
+            self,
+            command_dir: str,
+            input_to_output: dict[str, str],
+            input_to_run_in_main: Optional[str] = None,
+    ) -> int:
+        os.makedirs(command_dir, exist_ok=True)
+        input_to_jobs_commands = dict()
+        for input_path in input_to_output:
+            if not os.path.exists(input_to_output[input_path]):
+                if input_to_run_in_main and input_path == input_to_run_in_main:
+                    continue
+                input_to_jobs_commands[input_path] = [
+                    os.getenv("CONDA_ACT_CMD"),
+                    f"cd {os.path.dirname(input_path)}",
+                    f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_path}",
+                ]
+        main_cmd = None
+        if input_to_run_in_main and not os.path.exists(input_to_output[input_to_run_in_main]):
+                main_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {command_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_to_run_in_main}"
+
+        logger.info(
+            f"# chromevol jobs to run = {len(input_to_jobs_commands.keys()) + 1 if main_cmd is not None else 0}"
+        )
+        if len(input_to_jobs_commands.keys()) > 0:
+            if self.parallel:
+                jobs_paths = PBSService.generate_jobs(
+                    jobs_commands=[input_to_jobs_commands[input_path] for input_path in input_to_jobs_commands if input_path != input_to_run_in_main],
+                    work_dir=f"{command_dir}jobs/",
+                    output_dir=f"{command_dir}jobs_output/",
+                    ram_per_job_gb=self.ram_per_job,
+                    queue=self.queue,
+                )
+                jobs_ids = PBSService.submit_jobs(
+                    jobs_paths=jobs_paths, max_parallel_jobs=self.max_parallel_jobs, queue=self.queue,
+                )  # make sure to always submit these jobs
+                done = False
+                while not done:
+                    PBSService.wait_for_jobs(jobs_ids=jobs_ids)
+                    job_ids = PBSService.retry_memory_failures(jobs_paths=jobs_paths,
+                                                               jobs_output_dir=f"{command_dir}jobs_output/")
+                    done = (len(job_ids) == 0)
+            else:
+                for input_path in input_to_jobs_commands:
+                    job_commands_set = input_to_jobs_commands[input_path]
+                    logger.info(f"submitting chromevol process for {input_path}")
+                    res = os.system(";".join(job_commands_set))
+                    if not os.path.exists(input_to_output[input_path]):
+                        logger.error(
+                            f"execution of {input_path} fit failed after retry"
+                        )
+            # in any case, run the main command from the parent process
+
+        if main_cmd is not None:
+            res = os.system(main_cmd)
+
+        logger.info(
+            f"completed execution of chromevol across {len(input_to_jobs_commands.keys())} inputs"
+        )
+        return 0
 
     @staticmethod
     def _create_models_input_files(
         tree_path: str, counts_path: str, work_dir: str
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict:
         model_to_io = dict()
         base_input_ags = {
             "tree_path": tree_path,
@@ -90,70 +164,35 @@ class Pipeline:
         return winning_model
 
     def get_best_model(
-        self,
-        counts_path: str,
-        tree_path: str,
-        parallel: bool = False,
-        ram_per_job: int = 1,
-        queue: str = "itaym",
+            self,
+            counts_path: str,
+            tree_path: str,
     ) -> str:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
         model_to_io = self._create_models_input_files(
-            tree_path=tree_path,
-            counts_path=counts_path,
-            work_dir=model_selection_work_dir,
+            tree_path=tree_path, counts_path=counts_path, work_dir=model_selection_work_dir,
         )
-        jobs_commands = []
-        model_names = list(model_to_io.keys())
-        for model_name in model_names:
-            if not os.path.exists(model_to_io[model_name]["output_path"]):
-                jobs_commands.append(
-                    [
-                        os.getenv("CONDA_ACT_CMD"),
-                        f"cd {model_selection_work_dir}",
-                        f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[model_name]['input_path']}",
-                    ]
+        input_to_output = {
+            model_to_io[model_name]["input_path"]: model_to_io[model_name]["output_path"]
+            for model_name in model_to_io
+        }
+        most_complex_model_input_path = model_to_io[most_complex_model]["input_path"]
+        res = self._send_chromevol_commands(
+            command_dir=model_selection_work_dir,
+            input_to_output=input_to_output,
+            input_to_run_in_main=most_complex_model_input_path,
+        )
+        models_to_del = []
+        for model_name in model_to_io:
+            output_path = model_to_io[model_name]["output_path"]
+            if not os.path.exists(output_path):
+                logger.error(
+                    f"execution of model {model_name} fit failed after retry and thus the model will be excluded from model selection"
                 )
-        most_complex_model_cmd = None
-        if not os.path.exists(model_to_io[most_complex_model]["output_path"]):
-            most_complex_model_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {model_selection_work_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={model_to_io[most_complex_model]['input_path']}"
-        logger.info(
-            f"# models to fit = {len(jobs_commands) + 1 if most_complex_model_cmd is not None else 0}"
-        )
-        if len(jobs_commands) > 0:
-            if parallel:
-                # PBSService.execute_job_array(work_dir=f"{model_selection_work_dir}jobs/", jobs_commands=jobs_commands, output_dir=f"{model_selection_work_dir}jobs_output/", queue=queue)
-                jobs_paths = PBSService.generate_jobs(
-                    jobs_commands=jobs_commands,
-                    work_dir=f"{model_selection_work_dir}jobs/",
-                    output_dir=f"{model_selection_work_dir}jobs_output/",
-                    ram_per_job_gb=ram_per_job,
-                    queue=queue,
-                )
-                jobs_ids = PBSService.submit_jobs(
-                    jobs_paths=jobs_paths, max_parallel_jobs=1000, queue=queue
-                )  # make sure to always submit these jobs
-                res = os.system(most_complex_model_cmd)
-                PBSService.wait_for_jobs(jobs_ids=jobs_ids)
-            else:
-                for job_commands_set in jobs_commands:
-
-                    model_name = model_names[jobs_commands.index(job_commands_set)]
-                    logger.info(f"submitting job commands for model {model_name}")
-                    res = os.system(";".join(job_commands_set))
-                    if not os.path.exists(model_to_io[model_name]["output_path"]):
-                        logger.error(
-                            f"execution of model {model_name} fit failed after retry and thus the model will be excluded from model selection"
-                        )
-                        del model_to_io[model_name]
-                        continue
-        if most_complex_model_cmd is not None:
-            logger.info(f"fitting the most complex model")
-            res = os.system(most_complex_model_cmd)
-        logger.info(
-            f"completed execution of chromevol across {len(jobs_commands)} different models"
-        )
+                models_to_del.append(model_name)
+        for model_name in models_to_del:
+            del model_to_io[model_name]
         return self._select_best_model(model_to_io)
 
     @staticmethod
@@ -163,7 +202,7 @@ class Pipeline:
         model_parameters_path: str,
         work_dir: str,
         mappings_num: int,
-        optimize: bool = False,
+        optimize_model: bool = False,
     ) -> Tuple[str, str]:
         sm_input_path = f"{work_dir}sm_params.json"
         chromevol_input_path = f"{work_dir}sm.params"
@@ -176,7 +215,7 @@ class Pipeline:
             "run_stochastic_mapping": True,
             "num_of_mappings": mappings_num,
         }
-        if not optimize:
+        if not optimize_model:
             input_args["optimize_points_num"] = 1
             input_args["optimize_iter_num"] = 0
         with open(model_parameters_path, "r") as infile:
@@ -196,7 +235,7 @@ class Pipeline:
         model_parameters_path: str,
         mappings_num: int = 100,
         optimize_model: bool = False,
-    ) -> list[pd.DataFrame]:
+    ) -> pd.DataFrame:
         sm_work_dir = self.work_dir
         if counts_path.startswith(f"{self.work_dir}/simulations/"):
             sm_work_dir = os.path.dirname(counts_path)
@@ -208,7 +247,7 @@ class Pipeline:
             model_parameters_path=model_parameters_path,
             work_dir=sm_work_dir,
             mappings_num=mappings_num,
-            optimize=optimize_model,
+            optimize_model=optimize_model,
         )
         if (
             not os.path.exists(sm_output_dir)
@@ -219,14 +258,13 @@ class Pipeline:
                 f"cd {sm_work_dir}",
                 f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
             ]
-            res = os.system(";".join(commands))
+            res = os.system(";".join(commands)) # add parallelization
         logger.info(f"computed {mappings_num} mappings successfully")
-        mappings = self._process_mappings(
-            stochastic_mappings_dir=sm_output_dir,
+        taxon_to_polyploidy_support = self._get_frequency_of_duplication_events(
+            sm_work_dir=sm_work_dir,
             mappings_num=mappings_num,
-            tree_with_states_path=f"{sm_work_dir}/MLAncestralReconstruction.tree",
         )
-        return mappings
+        return taxon_to_polyploidy_support
 
     @staticmethod
     def _get_true_values(
@@ -295,7 +333,7 @@ class Pipeline:
             args["memoization"][x[0]] = coeff
             return -1 * coeff  # maximize coeff
 
-        lower_bound = 0.4 if for_polyploidy else 0
+        lower_bound = 0.5 if for_polyploidy else 0
         bounds = ((lower_bound, upper_bound),)
         examined_thresholds = dict()
         minimizer_kwargs = {
@@ -311,7 +349,7 @@ class Pipeline:
         }
         poly_sp = np.max(
             [
-                0.4,
+                0.5,
                 ploidy_data.loc[
                     ploidy_data.is_polyploid == 1, "duplication_events_frequency"
                 ].min(),
@@ -344,14 +382,14 @@ class Pipeline:
             thr for thr in examined_thresholds if examined_thresholds[thr] == best_coeff
         ]
         logger.info(
-            f"other thresholds with the same coefficient = {','.join([str(np.round(thr,3)) for thr in thresholds_with_best_coeff])}"
+            f"other thresholds with the same coefficient = {','.join([str(np.round(thr,3)) for thr in set(thresholds_with_best_coeff)])}"
         )
         best_threshold = (
             np.min(thresholds_with_best_coeff)
             if for_polyploidy
             else np.max(thresholds_with_best_coeff)
         )
-        logger.info(f"final selected threshold with the same coeff = {best_threshold}")
+        logger.info(f"final selected {'poly' if for_polyploidy else 'di'}ploidy threshold with the same coeff = {best_threshold}")
         # compute reliability scores
         taxon_to_reliability_scores = pd.DataFrame(
             columns=[
@@ -465,7 +503,7 @@ class Pipeline:
             )
         end_time = timer()
         logger.info(
-            f"completed processing {mappings_num} mappings in {timedelta(seconds=end_time-start_time)}"
+            f"completed processing {mappings_num} mappings within {stochastic_mappings_dir} in {timedelta(seconds=end_time-start_time)}"
         )
         return mappings
 
@@ -581,36 +619,38 @@ class Pipeline:
         trials_num: int = 1000,
         simulations_num: int = 10,
     ) -> list[str]:
-        frequencies_path = f"{simulations_dir}/simulations_states_frequencies.txt"
-        Pipeline._parse_simulation_frequencies(
-            model_parameters_path=model_parameters_path, output_path=frequencies_path
-        )
-        sm_input_path = Pipeline._create_simulation_input(
-            tree_path=tree_path,
-            model_parameters_path=model_parameters_path,
-            work_dir=simulations_dir,
-            frequencies_path=frequencies_path,
-            min_observed_chr_count=min_observed_chr_count,
-            max_observed_chr_count=max_observed_chr_count,
-            trials_num=trials_num,
-            simulations_num=simulations_num,
-        )
+        if not(os.path.exists(simulations_dir) and len(os.listdir(simulations_dir)) >= simulations_num):
 
-        if len(os.listdir(simulations_dir)) < simulations_num:
-            commands = [
-                os.getenv("CONDA_ACT_CMD"),
-                f"cd {simulations_dir}",
-                f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
-            ]
-            joined_cmd = ";".join(commands).replace("//", "/")
-            res = os.system(joined_cmd)
+            frequencies_path = f"{simulations_dir}/simulations_states_frequencies.txt"
+            Pipeline._parse_simulation_frequencies(
+                model_parameters_path=model_parameters_path, output_path=frequencies_path
+            )
+            sm_input_path = Pipeline._create_simulation_input(
+                tree_path=tree_path,
+                model_parameters_path=model_parameters_path,
+                work_dir=simulations_dir,
+                frequencies_path=frequencies_path,
+                min_observed_chr_count=min_observed_chr_count,
+                max_observed_chr_count=max_observed_chr_count,
+                trials_num=trials_num,
+                simulations_num=simulations_num,
+            )
 
-        Pipeline._remove_unsuccessful_simulations(
-            simulations_dir=simulations_dir, max_state=200
-        )
-        Pipeline._pick_successful_simulations(
-            simulations_dir=simulations_dir, simulations_num=simulations_num
-        )
+            if len(os.listdir(simulations_dir)) < simulations_num:
+                commands = [
+                    os.getenv("CONDA_ACT_CMD"),
+                    f"cd {simulations_dir}",
+                    f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={sm_input_path}",
+                ]
+                joined_cmd = ";".join(commands).replace("//", "/")
+                res = os.system(joined_cmd)
+
+            Pipeline._remove_unsuccessful_simulations(
+                simulations_dir=simulations_dir, max_state=200
+            )
+            Pipeline._pick_successful_simulations(
+                simulations_dir=simulations_dir, simulations_num=simulations_num
+            )
 
         successful_simulations_dirs = []
         for path in os.listdir(simulations_dir):
@@ -735,20 +775,39 @@ class Pipeline:
                 ] = f"{self.work_dir}/simulations/{i}_simulations_based_thresholds.pkl"
 
         if not os.path.exists(simulations_ploidy_data_path):
+            input_to_output = dict()
             simulations_ploidy_data = []
+            sm_input_path = None
             for simulation_dir in simulations_dirs:
-                mappings = self._get_stochastic_mappings(
-                    counts_path=f"{simulation_dir}/counts.fasta",
-                    tree_path=tree_path,
-                    model_parameters_path=model_parameters_path,
-                    mappings_num=mappings_num,
-                    optimize_model=True,
-                )
+                sm_work_dir = f"{simulation_dir}/stochastic_mapping/"
+                if not os.path.exists(sm_work_dir):
+                    os.makedirs(sm_work_dir, exist_ok=True)
+                    sm_input_path, sm_output_dir = self._create_stochastic_mapping_input(
+                        counts_path=f"{simulation_dir}/counts.fasta",
+                        tree_path=tree_path,
+                        model_parameters_path=model_parameters_path,
+                        work_dir=sm_work_dir,
+                        mappings_num=mappings_num,
+                        optimize_model=True,
+                    )
+                    if (
+                            not os.path.exists(sm_output_dir)
+                            or len(os.listdir(sm_output_dir)) < mappings_num
+                    ):
+                        input_to_output[sm_input_path] = f"{sm_output_dir}/chromevol.res"
+
+            self._send_chromevol_commands(command_dir=f"{self.work_dir}/simulations/",
+                                              input_to_output=input_to_output,
+                                              input_to_run_in_main=sm_input_path,
+                                              )
+
+            for simulation_dir in simulations_dirs:
                 node_to_ploidy_level = pd.read_csv(
                     f"{simulation_dir}/node_to_is_polyploid.csv"
                 )
                 node_to_duplication_events_frequency = self._get_frequency_of_duplication_events(
-                    mappings=mappings
+                    sm_work_dir=f"{simulation_dir}/stochastic_mapping/",
+                    mappings_num=mappings_num,
                 )
                 node_to_ploidy_level.set_index("node", inplace=True)
                 node_to_ploidy_level["duplication_events_frequency"] = np.nan
@@ -854,62 +913,72 @@ class Pipeline:
             polyploidy_reliability_scores,
         )
 
-    @staticmethod
     def _get_frequency_of_duplication_events(
-        mappings: list[pd.DataFrame],
+        self,
+        sm_work_dir: str,
+        mappings_num: int,
+
     ) -> pd.DataFrame:
-        all_mappings = pd.concat(mappings)
-        taxon_to_polyploidy_support = (
-            all_mappings[["NODE", "is_polyploid", "inferred_is_polyploid"]]
-            .groupby("NODE")
-            .agg(
-                {
-                    "is_polyploid": lambda labels: np.sum(labels) / len(labels.dropna())
-                    if len(labels.dropna()) > 0
-                    else np.nan,
-                    "inferred_is_polyploid": lambda labels: np.sum(labels)
-                    / len(labels.dropna())
-                    if len(labels.dropna()) > 0
-                    else np.nan,
-                }
-            )
-            .reset_index()
-            .rename(
-                columns={
-                    "is_polyploid": "polyploidy_frequency",
-                    "inferred_is_polyploid": "inferred_polyploidy_frequency",
-                }
-            )
+        sm_output_dir = f"{sm_work_dir}/stochastic_mappings/"
+        processed_mappings_path = f"{sm_work_dir}/processed_mappings.csv"
+        if os.path.exists(processed_mappings_path):
+            taxon_to_polyploidy_support = pd.read_csv(processed_mappings_path)
+        else:
+            mappings = self._process_mappings(
+            stochastic_mappings_dir=sm_output_dir,
+            mappings_num=mappings_num,
+            tree_with_states_path=f"{self.work_dir}/stochastic_mapping/MLAncestralReconstruction.tree",
         )
-        taxon_to_polyploidy_support.set_index("NODE", inplace=True)
-        taxon_to_polyploidy_support["polyploidy_frequency"].fillna(
-            value=taxon_to_polyploidy_support[
-                "inferred_polyploidy_frequency"
-            ].to_dict(),
-            inplace=True,
-        )
-        taxon_to_polyploidy_support.reset_index(inplace=True)
+            all_mappings = pd.concat(mappings)
+            taxon_to_polyploidy_support = (
+                all_mappings[["NODE", "is_polyploid", "inferred_is_polyploid"]]
+                .groupby("NODE")
+                .agg(
+                    {
+                        "is_polyploid": lambda labels: np.sum(labels) / len(labels.dropna())
+                        if len(labels.dropna()) > 0
+                        else np.nan,
+                        "inferred_is_polyploid": lambda labels: np.sum(labels)
+                        / len(labels.dropna())
+                        if len(labels.dropna()) > 0
+                        else np.nan,
+                    }
+                )
+                .reset_index()
+                .rename(
+                    columns={
+                        "is_polyploid": "polyploidy_frequency",
+                        "inferred_is_polyploid": "inferred_polyploidy_frequency",
+                    }
+                )
+            )
+            taxon_to_polyploidy_support.set_index("NODE", inplace=True)
+            taxon_to_polyploidy_support["polyploidy_frequency"].fillna(
+                value=taxon_to_polyploidy_support[
+                    "inferred_polyploidy_frequency"
+                ].to_dict(),
+                inplace=True,
+            )
+            taxon_to_polyploidy_support.reset_index(inplace=True)
+            taxon_to_polyploidy_support.to_csv(processed_mappings_path, index=False)
 
         return taxon_to_polyploidy_support
 
     def _get_frequency_based_ploidity_classification(
         self,
-        mappings: list[pd.DataFrame],
+        taxon_to_polyploidy_support: pd.DataFrame,
         polyploidity_threshold: float = 0.9,
         diploidity_threshold: float = 0.1,
     ) -> dict[str, int]:  # 0 - diploid, 1 - polyploid, np.nan - unable to determine
 
         tree_with_internal_names_path = (
-            f"{self.work_dir}/simulations/0/simulatedDataAncestors.tree"
+            f"{self.work_dir}/stochastic_mapping/MLAncestralReconstruction.tree"
         )
         full_tree = Tree(tree_with_internal_names_path, format=1)
         for node in full_tree.traverse():
             if "-" in node.name:
                 node.name = "-".join(node.name.split("-")[:-1])
 
-        taxon_to_polyploidy_support = Pipeline._get_frequency_of_duplication_events(
-            mappings=mappings
-        )
         taxon_to_polyploidy_support["is_polyploid"] = (
             taxon_to_polyploidy_support["polyploidy_frequency"]
             >= polyploidity_threshold
@@ -995,7 +1064,7 @@ class Pipeline:
             else np.nan
             for record in taxa_records
         }
-        ploidy_classification["Taxon"] = pd.Series([n.name for n in tree.traverse()])
+        ploidy_classification["Taxon"] = pd.Series(tree.get_leaf_names())
         ploidy_classification["Chromosome count"] = ploidy_classification[
             "Taxon"
         ].apply(lambda name: taxon_name_to_count.get(name, "x"))
@@ -1013,12 +1082,13 @@ class Pipeline:
                 "Ploidy inference"
             ] = 0  # if no duplication parameters are included in the best model, than all taxa must be diploids
         else:
-            mappings = self._get_stochastic_mappings(
+            taxon_to_polyploidy_support = self._get_stochastic_mappings(
                 counts_path=counts_path,
                 tree_path=tree_path,
                 model_parameters_path=model_parameters_path,
                 mappings_num=mappings_num,
             )
+            polyploidy_reliability_scores, diploidity_reliability_scores = None, None
             if optimize_thresholds:
 
                 simulations_dir = f"{self.work_dir}/simulations/"
@@ -1049,7 +1119,7 @@ class Pipeline:
                 f"classifying taxa to ploidity status based on duplication events frequency across stochastic mappings"
             )
             taxon_to_ploidy_classification = self._get_frequency_based_ploidity_classification(
-                mappings=mappings,
+                taxon_to_polyploidy_support=taxon_to_polyploidy_support,
                 polyploidity_threshold=polyploidity_threshold,
                 diploidity_threshold=diploidity_threshold,
             )
@@ -1087,9 +1157,6 @@ class Pipeline:
                 ploidy_classification["Ploidy inference support"].fillna(
                     value=taxon_to_ploidy_classification_support, inplace=True
                 )
-        logger.info(
-            f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification"
-        )
 
         if taxonomic_classification_data is not None:
             taxon_to_genus, taxon_to_family = (
@@ -1112,6 +1179,11 @@ class Pipeline:
         ploidy_classification["Chromosome count"].fillna("x", inplace=True)
         ploidy_classification["Taxon"].replace({"": np.nan}, inplace=True)
         ploidy_classification.dropna(subset=["Taxon"], inplace=True)
+
+        logger.info(
+            f"out of {ploidy_classification.shape[0]} taxa, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 1].shape[0]} were classified as polyploids, {ploidy_classification.loc[ploidy_classification['Ploidy inference'] == 0].shape[0]} were classified as diploids and {ploidy_classification.loc[ploidy_classification['Ploidy inference'].isna()].shape[0]} have no reliable classification"
+        )
+
         return ploidy_classification
 
     @staticmethod
@@ -1203,7 +1275,6 @@ class Pipeline:
                     phylo_out.write(line)
                     if taxon_name:
                         phylo_out.write(f"<name>{taxon_name}<name>")
-                        taxon_name = None
                 elif "<phylogeny" in line:
                     phylo_out.write(line)
                     phylo_out.write(labels_str)
