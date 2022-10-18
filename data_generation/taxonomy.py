@@ -9,6 +9,10 @@ from pandarallel import pandarallel
 
 pandarallel.initialize(progress_bar=True, nb_workers=5, use_memory_fs=False)
 
+
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
 from Bio import Entrez
 
 import logging
@@ -94,7 +98,7 @@ def get_rank_name(
 
 
 def get_ncbi_tax_id(tax_name: str) -> int:
-    Entrez.email = os.environ.get("ENTREZ_EMAIL")
+    Entrez.email = os.getenv("ENTREZ_EMAIL")
     tax_id = np.nan
     try:
         res = Entrez.read(
@@ -173,9 +177,11 @@ def fill_missing_data_from_itis(
     return input_df
 
 
-def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int, str]]:
-    Entrez.email = os.environ.get("ENTREZ_EMAIL")
-    tax_id_to_genus, tax_id_to_family = dict(), dict()
+def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str],
+                                                        dict[int, str],
+                                                        dict[int, str]]:
+    tax_id_to_genus, tax_id_to_family, tax_id_to_rank = dict(), dict(), dict()
+    Entrez.email = os.getenv("ENTREZ_EMAIL")
     try:
         res = list(
             Entrez.parse(
@@ -189,6 +195,7 @@ def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int
         )
         for record in res:
             tax_id = int(record["TaxId"])
+            tax_id_to_rank[tax_id] = record["Rank"].lower()
             for rank_data in record["LineageEx"]:
                 if rank_data["Rank"] == "genus":
                     tax_id_to_genus[tax_id] = rank_data["ScientificName"].lower()
@@ -198,25 +205,29 @@ def get_tax_id_to_tax_data(tax_ids: list[int]) -> tuple[dict[int, str], dict[int
         logger.warning(
             f"could not fetch tax data for {len(tax_ids)} tax ids due to error {e}"
         )
-    return tax_id_to_genus, tax_id_to_family
-
+    return tax_id_to_genus, tax_id_to_family, tax_id_to_rank
 
 def fill_missing_data_from_ncbi(data: pd.DataFrame, search_by_col: str) -> pd.DataFrame:
     data.reset_index(inplace=True)
     data["ncbi_tax_id"] = data[search_by_col].parallel_apply(get_ncbi_tax_id)
-    tax_ids = data.ncbi_tax_id.unique().tolist()
+    tax_ids = data.ncbi_tax_id.dropna().astype(np.int16).unique().tolist()
     batch_size = 1000
     tax_ids_batches = [
         tax_ids[i : i + batch_size] for i in range(0, len(tax_ids), batch_size)
     ]
-    tax_id_to_genus, tax_id_to_family = dict(), dict()
+    tax_id_to_genus, tax_id_to_family, tax_id_to_rank = dict(), dict(), dict()
     for batch in tax_ids_batches:
-        batch_to_genus, batch_to_family = get_tax_id_to_tax_data(tax_ids=batch)
+        batch_to_genus, batch_to_family, batch_to_rank = get_tax_id_to_tax_data(tax_ids=batch)
         tax_id_to_genus.update(batch_to_genus)
         tax_id_to_family.update(batch_to_family)
+        tax_id_to_rank.update(batch_to_rank)
     data.set_index("ncbi_tax_id", inplace=True)
     data["genus"].fillna(value=tax_id_to_genus, inplace=True)
     data["family"].fillna(value=tax_id_to_family, inplace=True)
+    if "taxon_rank" in data.columns:
+        data["taxon_rank"].fillna(value=tax_id_to_rank, inplace=True)
+    data.genus = data.parallel_apply(lambda record: record[search_by_col] if record.taxon_rank == "genus" else np.nan, axis=1)
+    data.family = data.parallel_apply(lambda record: record[search_by_col] if record.taxon_rank == "family" else np.nan, axis=1)
     return data
 
 
