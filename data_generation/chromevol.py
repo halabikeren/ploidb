@@ -4,7 +4,7 @@ import os
 import re
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional, Union
+from typing import Dict, Tuple, Optional, Union
 from io import StringIO
 import numpy as np
 import pandas as pd
@@ -17,17 +17,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ModelParameter = namedtuple("ModelParameter", ["name", "func_name", "init_value"])
+ModelParameter = namedtuple("ModelParameter", ["input_name",
+                                               "output_name",
+                                               "func_name",
+                                               "init_value"])
 gain = ModelParameter(
-    name="gain", func_name="gainFunc", init_value=2.0
+    input_name="gain", output_name="gain", func_name="gainFunc", init_value=2.0
 )  # gain + loss always
-loss = ModelParameter(name="loss", func_name="lossFunc", init_value=2.0)
+loss = ModelParameter(input_name="loss", output_name="loss", func_name="lossFunc", init_value=2.0)
 dupl = ModelParameter(
-    name="dupl", func_name="duplFunc", init_value=2.0
+    input_name="dupl", output_name="dupl", func_name="duplFunc", init_value=2.0
 )  # in all models except one: the base in gain+loss
-demi_dupl = ModelParameter(name="demiPloidyR", func_name="demiDuplFunc", init_value=1.3)
-base_num = ModelParameter(name="baseNum", func_name=None, init_value=3)
-base_num_r = ModelParameter(name="baseNumR", func_name="baseNumRFunc", init_value=4.0)
+demi_dupl = ModelParameter(input_name="demiPloidyR", output_name="demi", func_name="demiDuplFunc", init_value=1.3)
+base_num = ModelParameter(input_name="baseNum", output_name="baseNum", func_name=None, init_value=3)
+base_num_r = ModelParameter(input_name="baseNumR", output_name="baseNumR", func_name="baseNumRFunc", init_value=4.0)
 model_parameters = [gain, loss, dupl, demi_dupl, base_num, base_num_r]
 models = [
     [gain, loss],
@@ -38,7 +41,7 @@ models = [
     [gain, loss, dupl, base_num, base_num_r, demi_dupl],
 ]
 most_complex_model = "_".join(
-    param.name for param in [gain, loss, dupl, base_num, base_num_r, demi_dupl]
+    param.input_name for param in [gain, loss, dupl, base_num, base_num_r, demi_dupl]
 )
 counts_path_template = "_dataFile = {counts_path}"
 included_parameter_template_with_func = (
@@ -106,19 +109,19 @@ class ChromevolExecutor:
         ]  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
         param_index = 1
         for param in model_parameters:
-            if param.name in parameters:
+            if param.input_name in parameters:
                 if param.func_name is not None:
                     input_string += included_parameter_template_with_func.format(
-                        param_name=param.name,
+                        param_name=param.input_name,
                         param_index=param_index,
-                        param_init_value=input_args["parameters"][param.name],
+                        param_init_value=input_args["parameters"][param.input_name],
                         func_name=param.func_name,
                     )
                 else:
                     input_string += included_parameter_template.format(
-                        param_name=param.name,
+                        param_name=param.input_name,
                         param_index=param_index,
-                        param_init_value=input_args["parameters"][param.name],
+                        param_init_value=input_args["parameters"][param.input_name],
                     )
                 param_index += 1
             elif param.func_name is not None:
@@ -173,10 +176,14 @@ class ChromevolExecutor:
         )
         try:
             parameters_str = parameters_regex.search(result_str).group(1)
-            parameter_regex = re.compile("Chromosome\.(.*?)0*_1\s=\s(\d*\.*\d*)")
+            parameter_regex = re.compile("Chromosome\.(.*?)0*_1\s=\s(\d*\.*\d*e*-*\d.*)")
             parameters = dict()
+            param_out_to_in_name = {param.output_name: param.input_name for param in model_parameters}
             for match in parameter_regex.finditer(parameters_str):
-                parameters[match.group(1)] = float(match.group(2))
+                param_out_name = match.group(1)
+                param_mle =  float(match.group(2))
+                param_in_name = param_out_to_in_name[param_out_name]
+                parameters[param_in_name] = param_mle
             return parameters
         except Exception as e:
             logger.error(
@@ -336,15 +343,16 @@ class ChromevolExecutor:
     def run(input_args: Dict[str, str]) -> ChromevolOutput:
         chromevol_input = ChromevolExecutor._get_input(input_args=input_args)
         raw_output_path = f"{chromevol_input.output_dir}/chromEvol.res"
-        res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)
-        chromevol_output = None
-        if res != 0:
-            res = ChromevolExecutor._retry(input_args=input_args)
+        if not os.path.exists(raw_output_path):
+            res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)
+            chromevol_output = None
             if res != 0:
-                logger.warning(
-                    f"retry failed execute chromevol on {chromevol_input.input_path}"
-                )
-                return chromevol_output
+                res = ChromevolExecutor._retry(input_args=input_args)
+                if res != 0:
+                    logger.warning(
+                        f"retry failed execute chromevol on {chromevol_input.input_path}"
+                    )
+                    return chromevol_output
         if os.path.exists(raw_output_path):
             chromevol_output = ChromevolExecutor._parse_output(
                 chromevol_input.output_dir
