@@ -126,14 +126,14 @@ class Pipeline:
             "run_stochastic_mapping": False,
         }
         for model in models:
-            model_name = "_".join([param.name for param in model])
+            model_name = "_".join([param.input_name for param in model])
             model_dir = f"{os.path.abspath(work_dir)}/{model_name}/"
             os.makedirs(model_dir, exist_ok=True)
             model_input_args = base_input_ags.copy()
             model_input_args["input_path"] = f"{model_dir}input.params"
             model_input_args["output_dir"] = model_dir
             model_input_args["parameters"] = {
-                param.name: param.init_value for param in model
+                param.input_name: param.init_value for param in model
             }
             model_input_path = f"{model_dir}input.json"
             with open(model_input_path, "w") as infile:
@@ -143,7 +143,7 @@ class Pipeline:
                 "output_path": f"{model_dir}/parsed_output.json",
             }
         logger.info(
-            f"created {len(models)} model input files for the considered models across the parameter set {','.join([param.name for param in model_parameters])}"
+            f"created {len(models)} model input files for the considered models across the parameter set {','.join([param.input_name for param in model_parameters])}"
         )
         return model_to_io
 
@@ -293,6 +293,7 @@ class Pipeline:
             if is_upper_bound
             else ploidy_data.duplication_events_frequency >= freq_threshold
         )
+
         predicted_values.index = ploidy_data["node"]
         return predicted_values
 
@@ -345,9 +346,9 @@ class Pipeline:
                 "memoization": examined_thresholds,
             },
             "bounds": bounds,
-            "tol": 1e-4,
+            "tol": 1e-3,
         }
-        poly_sp = np.max(
+        poly_sp = np.nanmax(
             [
                 0.5,
                 ploidy_data.loc[
@@ -355,7 +356,7 @@ class Pipeline:
                 ].min(),
             ],
         )
-        di_sp = np.min(
+        di_sp = np.nanmin(
             [
                 ploidy_data.loc[
                     ploidy_data.is_polyploid == 0, "duplication_events_frequency"
@@ -363,6 +364,7 @@ class Pipeline:
                 upper_bound,
             ]
         )
+        di_sp = di_sp if di_sp > 0 else  upper_bound/2
         logger.info(
             f"optimizing {'poly' if for_polyploidy else 'di'}ploidy threshold with a starting point of {poly_sp if for_polyploidy else di_sp}"
         )
@@ -662,7 +664,7 @@ class Pipeline:
             except Exception as e:
                 continue
 
-        if len(successful_simulations_dirs) < simulations_num:
+        if len(successful_simulations_dirs) < simulations_num-1:
             raise ValueError(
                 f"after {trials_num} trials, chromevol succeeded in creating only {len(successful_simulations_dirs)} successful simulations"
             )
@@ -834,7 +836,8 @@ class Pipeline:
         diploidy_reliability_scores, polyploidy_reliability_scores = np.nan, np.nan
         for sim_num in sim_num_to_thresholds_path:
             thresholds_path = sim_num_to_thresholds_path[sim_num]
-            if os.path.exists(thresholds_path):
+            # if os.path.exists(thresholds_path):
+            if False:
                 with open(thresholds_path, "rb") as infile:
                     optimal_thresholds_data = pickle.load(file=infile)
                     polyploidity_threshold = optimal_thresholds_data[
@@ -882,7 +885,7 @@ class Pipeline:
                         )
                     ],
                     for_polyploidy=False,
-                    upper_bound=polyploidity_threshold,
+                    upper_bound=np.min([0.5, polyploidity_threshold]),
                 )
 
                 logger.info(
@@ -1032,11 +1035,12 @@ class Pipeline:
             "ploidy_inference"
         ] = taxon_to_polyploidy_support.apply(
             lambda record: 1
-            if record.is_polyploid
-            else (0 if record.is_diploid else np.nan),
+            if record.is_polyploid == 1
+            else (0 if record.is_diploid == 1 else np.nan),
             axis=1,
         )
         taxon_to_polyploidy_support.NODE = taxon_to_polyploidy_support.NODE
+
         return taxon_to_polyploidy_support.set_index("NODE")[
             "ploidy_inference"
         ].to_dict()
@@ -1128,6 +1132,8 @@ class Pipeline:
             ploidy_classification["Ploidy inference"].fillna(
                 value=taxon_to_ploidy_classification, inplace=True
             )
+            ploidy_classification["Ploidy transitions frequency"] = np.nan
+            ploidy_classification["Ploidy transitions frequency"].fillna(value=taxon_to_polyploidy_support.set_index("NODE")["polyploidy_frequency"].to_dict(), inplace=True)
 
             if optimize_thresholds:
                 poly_to_support = polyploidy_reliability_scores.set_index("node")[
@@ -1171,10 +1177,11 @@ class Pipeline:
                 lambda name: taxon_to_family.get(name.lower().replace("_", " "), np.nan)
             )
 
-        res = os.system(
-            f"cd {os.path.dirname(self.work_dir)};zip -r simulations.zip ./simulations"
-        )
-        res = os.system(f"rm -rf {self.work_dir}simulations/")
+        if os.path.exists(f"{self.work_dir}simulations/"):
+            res = os.system(
+                f"cd {os.path.dirname(self.work_dir)};zip -r simulations.zip ./simulations"
+            )
+            res = os.system(f"rm -rf {self.work_dir}simulations/")
 
         ploidy_classification["Chromosome count"].fillna("x", inplace=True)
         ploidy_classification["Taxon"].replace({"": np.nan}, inplace=True)
