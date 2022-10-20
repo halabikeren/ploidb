@@ -71,21 +71,21 @@ logger = logging.getLogger(__name__)
     help="indicator weather thresholds should be optimized based on simulations",
     type=bool,
     required=False,
-    default=True,
+    default=False, # change to false for unfinished jobs
 )
 @click.option(
     "--diploidy_threshold",
     help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as diploids",
     type=click.FloatRange(min=0, max=1),
     required=False,
-    default=0.1,
+    default=0.4,
 )
 @click.option(
     "--polyploidy_threshold",
     help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as polyploids",
     type=click.FloatRange(min=0, max=1),
     required=False,
-    default=0.9,
+    default=0.6,
 )
 @click.option(
     "--queue",
