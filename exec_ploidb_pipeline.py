@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
     default=None,
 )
 @click.option(
+    "--ploidy_classification_path",
+    help="path to write the ploidy classification to",
+    type=str,
+    required=False,
+    default=None,
+)
+@click.option(
     "--parallel",
     help="indicator weather to run the pipeline in parallel (1) with one idle parent job or sequentially",
     type=bool,
@@ -115,7 +122,11 @@ def exec_ploidb_pipeline(
     queue: str,
     debug_sim_num: bool,
     max_parallel_jobs: int,
+    ploidy_classification_path: str,
 ):
+
+    if ploidy_classification_path is None:
+        ploidy_classification_path = f"{output_dir}/ploidy.csv"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -159,17 +170,17 @@ def exec_ploidb_pipeline(
         optimize_thresholds=optimize_thresholds,
         debug=debug_sim_num,
     )
-    test_ploidity_classification.to_csv(f"{output_dir}ploidy.csv", index=False)
+    test_ploidity_classification.to_csv(ploidy_classification_path, index=False)
     pipeline.write_labeled_phyloxml_tree(
         tree_path=tree_path,
         ploidy_classification_data=test_ploidity_classification,
-        output_path=f"{output_dir}/classified_tree.phyloxml",
+        output_path=f"{os.path.dirname(ploidy_classification_path)}/classified_tree.phyloxml",
     )
 
     pipeline.write_labeled_newick_tree(
         tree_path=tree_path,
         ploidy_classification_data=test_ploidity_classification,
-        output_path=f"{output_dir}/classified_tree.newick",
+        output_path=f"{os.path.dirname(ploidy_classification_path)}/classified_tree.newick",
     )
 
     end_time = timer()
