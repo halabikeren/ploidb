@@ -135,11 +135,12 @@ class PBSService:
                 res = subprocess.check_output(
                     ["qsub", "-q", queue, f"{jobs_paths[job_index]}"]
                 )
+                logger.info(f"job = {jobs_paths[job_index]}, res = {res}")
                 jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
                 job_index += 1
             except Exception as e:
                 logger.error(
-                    f"failed to submit job at index {job_index} due to error {e} with result {res}"
+                    f"failed to submit job at index {job_index} due to error {e}"
                 )
                 exit(1)
             if job_index % 500 == 0:
