@@ -153,7 +153,10 @@ def exec_ploidb_pipeline(
         tree_path=tree_path,
     )
 
-    logger.info(f"searching for optimal classification thresholds")
+    if optimize_thresholds:
+        logger.info(f"searching for optimal classification thresholds")
+    else:
+        logger.info(f"determining ploidy level based on the fixed diploidy and polyploidy thresholds {diploidy_threshold} and {polyploidy_threshold}")
     taxonomic_classification = (
         pd.read_csv(taxonomic_classification_path)
         if taxonomic_classification_path is not None
