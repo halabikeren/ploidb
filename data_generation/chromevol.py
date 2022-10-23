@@ -238,7 +238,7 @@ class ChromevolExecutor:
 
     @staticmethod
     def _get_tree_scaling_factor(result_str: str) -> float:
-        scaling_factor_regex = re.compile("Tree scaling factor is\:\s(\d*\.?\d*)")
+        scaling_factor_regex = re.compile("Tree scaling factor is\:\s(\d*\.?\d*[e-]*\d*)")
         try:
             return float(scaling_factor_regex.search(result_str).group(1))
         except Exception as e:
