@@ -161,6 +161,8 @@ class Pipeline:
         logger.info(
             f"the selected model is {winning_model} with a score of {winning_model_score}"
         )
+        if pd.isna(winning_model):
+            raise ValueError(f"failed to train any model on the dataset")
         return winning_model
 
     def get_best_model(
@@ -178,6 +180,8 @@ class Pipeline:
             for model_name in model_to_io
         }
         most_complex_model_input_path = model_to_io[most_complex_model]["input_path"]
+        res = os.system(f"rm -rf {model_selection_work_dir}/jobs/")
+        res = os.system(f"rm -rf {model_selection_work_dir}/jobs_output/")
         res = self._send_chromevol_commands(
             command_dir=model_selection_work_dir,
             input_to_output=input_to_output,
