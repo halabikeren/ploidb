@@ -162,27 +162,27 @@ def exec_ploidb_pipeline(
         if taxonomic_classification_path is not None
         else None
     )
-    test_ploidity_classification = pipeline.get_ploidity_classification(
+    test_ploidy_classification = pipeline.get_ploidy_classification(
         counts_path=counts_path,
         tree_path=tree_path,
         model_parameters_path=best_model_results_path,
         mappings_num=1000,
         taxonomic_classification_data=taxonomic_classification,
-        diploidity_threshold=diploidy_threshold,
-        polyploidity_threshold=polyploidy_threshold,
+        diploidy_threshold=diploidy_threshold,
+        polyploidy_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
         debug=debug_sim_num,
     )
-    test_ploidity_classification.to_csv(ploidy_classification_path, index=False)
+    test_ploidy_classification.to_csv(ploidy_classification_path, index=False)
     pipeline.write_labeled_phyloxml_tree(
         tree_path=tree_path,
-        ploidy_classification_data=test_ploidity_classification,
+        ploidy_classification_data=test_ploidy_classification,
         output_path=f"{os.path.dirname(ploidy_classification_path)}/classified_tree.phyloxml",
     )
 
     pipeline.write_labeled_newick_tree(
         tree_path=tree_path,
-        ploidy_classification_data=test_ploidity_classification,
+        ploidy_classification_data=test_ploidy_classification,
         output_path=f"{os.path.dirname(ploidy_classification_path)}/classified_tree.newick",
     )
 

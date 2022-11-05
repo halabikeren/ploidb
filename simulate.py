@@ -24,8 +24,14 @@ logger = logging.getLogger(__name__)
     required=True,
 )
 @click.option(
-    "--output_dir",
+    "--work_dir",
     help="directory to create the chromevol input in",
+    type=click.Path(exists=False),
+    required=True,
+)
+@click.option(
+    "--simulations_dir",
+    help="directory to create the simulations in",
     type=click.Path(exists=False),
     required=True,
 )
@@ -80,7 +86,8 @@ logger = logging.getLogger(__name__)
 def simulate(
     counts_path: str,
     tree_path: str,
-    output_dir: str,
+    work_dir: str,
+    simulations_dir: str,
     log_path: str,
     parallel: bool,
     ram_per_job: int,
@@ -102,8 +109,8 @@ def simulate(
 
     start_time = timer()
 
-    os.makedirs(output_dir, exist_ok=True)
-    pipeline = Pipeline(work_dir=output_dir,
+    os.makedirs(work_dir, exist_ok=True)
+    pipeline = Pipeline(work_dir=work_dir,
                         parallel=parallel,
                         ram_per_job=ram_per_job,
                         queue=queue,
@@ -116,8 +123,10 @@ def simulate(
         tree_path=tree_path,
     )
 
+    os.makedirs(simulations_dir, exist_ok=True)
     logger.info(f"simulating data based on selected model = {best_model_results_path}")
     simulations_dirs = pipeline.get_simulations(
+                simulations_dir=simulations_dir,
                 orig_counts_path=counts_path,
                 tree_path=tree_path,
                 model_parameters_path=best_model_results_path,
