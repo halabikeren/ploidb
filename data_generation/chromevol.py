@@ -11,42 +11,41 @@ import pandas as pd
 import pickle
 
 from dotenv import load_dotenv, find_dotenv
+
 load_dotenv(find_dotenv())
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-ModelParameter = namedtuple("ModelParameter", ["input_name",
-                                               "output_name",
-                                               "func_name",
-                                               "init_value"])
-gain = ModelParameter(
-    input_name="gain", output_name="gain", func_name="gainFunc", init_value=2.0
-)  # gain + loss always
+ModelParameter = namedtuple("ModelParameter", ["input_name", "output_name", "func_name", "init_value"])
+gain = ModelParameter(input_name="gain", output_name="gain", func_name="gainFunc", init_value=2.0)  # gain + loss always
 loss = ModelParameter(input_name="loss", output_name="loss", func_name="lossFunc", init_value=2.0)
 dupl = ModelParameter(
     input_name="dupl", output_name="dupl", func_name="duplFunc", init_value=2.0
 )  # in all models except one: the base in gain+loss
 demi_dupl = ModelParameter(input_name="demiPloidyR", output_name="demi", func_name="demiDuplFunc", init_value=1.3)
-base_num = ModelParameter(input_name="baseNum", output_name="baseNum", func_name=None, init_value=3)
+base_num = ModelParameter(input_name="baseNum", output_name="baseNum", func_name=None, init_value=6)
 base_num_r = ModelParameter(input_name="baseNumR", output_name="baseNumR", func_name="baseNumRFunc", init_value=4.0)
 model_parameters = [gain, loss, dupl, demi_dupl, base_num, base_num_r]
-models = [
+models_without_base_num = [
     [gain, loss],
     [gain, loss, dupl],
-    [gain, loss, base_num, base_num_r],
     [gain, loss, dupl, demi_dupl],
+]
+models_with_base_num = [
+    [gain, loss, base_num, base_num_r],
     [gain, loss, dupl, base_num, base_num_r],
     [gain, loss, dupl, base_num, base_num_r, demi_dupl],
 ]
-most_complex_model = "_".join(
+
+models = models_without_base_num + models_with_base_num
+most_complex_model_with_base_num = "_".join(
     param.input_name for param in [gain, loss, dupl, base_num, base_num_r, demi_dupl]
 )
+most_complex_model_without_base_num = "_".join(param.input_name for param in [gain, loss, dupl, demi_dupl])
 counts_path_template = "_dataFile = {counts_path}"
-included_parameter_template_with_func = (
-    "\n_{param_name}_1 = {param_index};{param_init_value}\n_{func_name} = CONST\n"
-)
+included_parameter_template_with_func = "\n_{param_name}_1 = {param_index};{param_init_value}\n_{func_name} = CONST\n"
 included_parameter_template = "\n_{param_name}_1 = {param_index};{param_init_value}\n"
 excluded_parameter_template = "\n_{func_name} = IGNORE\n"
 
@@ -99,14 +98,10 @@ class ChromevolExecutor:
     @staticmethod
     def _get_input(input_args: Dict[str, str]) -> ChromevolInput:
         chromevol_input = ChromevolInput(**input_args)
-        with open(
-            f"{os.path.dirname(__file__)}/chromevol_param.template", "r"
-        ) as infile:
+        with open(f"{os.path.dirname(__file__)}/chromevol_param.template", "r") as infile:
             input_template = infile.read()
         input_string = input_template.format(**dataclasses.asdict(chromevol_input))
-        parameters = input_args[
-            "parameters"
-        ]  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
+        parameters = input_args["parameters"]  # ASK TAL HOW TO DO THIS BETTER - I DON'T LIKE THIS
         param_index = 1
         for param in model_parameters:
             if param.input_name in parameters:
@@ -125,25 +120,15 @@ class ChromevolExecutor:
                     )
                 param_index += 1
             elif param.func_name is not None:
-                input_string += excluded_parameter_template.format(
-                    func_name=param.func_name
-                )
+                input_string += excluded_parameter_template.format(func_name=param.func_name)
         if input_args.get("counts_path", None) is not None:
-            input_string += counts_path_template.format(
-                counts_path=input_args["counts_path"]
-            )
+            input_string += counts_path_template.format(counts_path=input_args["counts_path"])
         if input_args.get("frequencies_path", None) is not None:
-            input_string += states_frequencies_template.format(
-                frequencies_path=input_args["frequencies_path"]
-            )
+            input_string += states_frequencies_template.format(frequencies_path=input_args["frequencies_path"])
         if input_args.get("max_transitions_num", None) is not None:
-            input_string += max_transitions_num_template.format(
-                max_transitions_num=input_args["max_transitions_num"]
-            )
+            input_string += max_transitions_num_template.format(max_transitions_num=input_args["max_transitions_num"])
         if input_args.get("max_chr_inferred", None) is not None:
-            input_string += max_chr_inferred_template.format(
-                max_chr_inferred=input_args["max_chr_inferred"]
-            )
+            input_string += max_chr_inferred_template.format(max_chr_inferred=input_args["max_chr_inferred"])
 
         input_string = input_string.replace("False", "false").replace(
             "True", "true"
@@ -171,9 +156,7 @@ class ChromevolExecutor:
 
     @staticmethod
     def _get_model_parameters(result_str: str) -> Dict[str, float]:
-        parameters_regex = re.compile(
-            "Final model parameters are\:(.*?)AIC", re.MULTILINE | re.DOTALL
-        )
+        parameters_regex = re.compile("Final model parameters are\:(.*?)AIC", re.MULTILINE | re.DOTALL)
         try:
             parameters_str = parameters_regex.search(result_str).group(1)
             parameter_regex = re.compile("Chromosome\.(.*?)0*_1\s=\s(\d*\.*\d*e*-*\d.*)")
@@ -181,40 +164,30 @@ class ChromevolExecutor:
             param_out_to_in_name = {param.output_name: param.input_name for param in model_parameters}
             for match in parameter_regex.finditer(parameters_str):
                 param_out_name = match.group(1)
-                param_mle =  float(match.group(2))
+                param_mle = float(match.group(2))
                 param_in_name = param_out_to_in_name[param_out_name]
                 parameters[param_in_name] = param_mle
             return parameters
         except Exception as e:
-            logger.error(
-                f"failed to extract model parameters from {result_str} due to error {e}"
-            )
+            logger.error(f"failed to extract model parameters from {result_str} due to error {e}")
             return np.nan
 
     @staticmethod
     def _get_root_chromosome_number(result_str: str) -> int:
-        root_chromosome_number_regex = re.compile(
-            "Ancestral chromosome number at the root\:\s(\d*)"
-        )
+        root_chromosome_number_regex = re.compile("Ancestral chromosome number at the root\:\s(\d*)")
         try:
             return int(root_chromosome_number_regex.search(result_str).group(1))
         except Exception as e:
-            logger.error(
-                f"failed to extract root chromosome number from {result_str} due to error {e}"
-            )
+            logger.error(f"failed to extract root chromosome number from {result_str} due to error {e}")
             return np.nan
 
     @staticmethod
     def _get_log_likelihood(result_str: str) -> float:
-        log_likelihood_regex = re.compile(
-            "Final optimized likelihood is\:\s(-*\d*\.?\d*)"
-        )
+        log_likelihood_regex = re.compile("Final optimized likelihood is\:\s(-*\d*\.?\d*)")
         try:
             return float(log_likelihood_regex.search(result_str).group(1))
         except Exception as e:
-            logger.error(
-                f"failed to extract log likelihood from {result_str} due to error {e}"
-            )
+            logger.error(f"failed to extract log likelihood from {result_str} due to error {e}")
             return np.nan
 
     @staticmethod
@@ -223,9 +196,7 @@ class ChromevolExecutor:
         try:
             return float(aicc_score_regex.search(result_str).group(1))
         except Exception as e:
-            logger.error(
-                f"failed to extract AICc score from {result_str} due to error {e}"
-            )
+            logger.error(f"failed to extract AICc score from {result_str} due to error {e}")
             return np.nan
 
     @staticmethod
@@ -242,9 +213,7 @@ class ChromevolExecutor:
         try:
             return float(scaling_factor_regex.search(result_str).group(1))
         except Exception as e:
-            logger.error(
-                f"failed to extract AICc score from {result_str} due to error {e}"
-            )
+            logger.error(f"failed to extract AICc score from {result_str} due to error {e}")
             return np.nan
 
     @staticmethod
@@ -253,17 +222,11 @@ class ChromevolExecutor:
     ) -> Tuple[float, float, int, Dict[str, float], float, str]:
         with open(path, "r") as infile:
             result_str = infile.read()
-        maximum_likelihood_estimators = ChromevolExecutor._get_model_parameters(
-            result_str=result_str
-        )
-        root_chromosome_number = ChromevolExecutor._get_root_chromosome_number(
-            result_str=result_str
-        )
+        maximum_likelihood_estimators = ChromevolExecutor._get_model_parameters(result_str=result_str)
+        root_chromosome_number = ChromevolExecutor._get_root_chromosome_number(result_str=result_str)
         log_likelihood = ChromevolExecutor._get_log_likelihood(result_str=result_str)
         model_score = ChromevolExecutor._get_model_score(result_str=result_str)
-        tree_scaling_factor = ChromevolExecutor._get_tree_scaling_factor(
-            result_str=result_str
-        )
+        tree_scaling_factor = ChromevolExecutor._get_tree_scaling_factor(result_str=result_str)
         state_to_freq = ChromevolExecutor._get_states_frequencies(result_str=result_str)
         states_frequencies_path = f"{os.path.dirname(path)}/root_frequencies.pkl"
         with open(states_frequencies_path, "wb") as outfile:
@@ -291,9 +254,7 @@ class ChromevolExecutor:
                 expectations_data = pd.read_csv(StringIO(expectations_str), sep="\t")
                 expectations_data.to_csv(output_path, index=False)
             except Exception as e:
-                logger.error(
-                    f"failed to extract expectations data from {input_path} due to error {e}"
-                )
+                logger.error(f"failed to extract expectations data from {input_path} due to error {e}")
         else:
             logger.info(f"expectations computation was not conduced in this execution")
 
@@ -321,9 +282,7 @@ class ChromevolExecutor:
             output_path=expected_events_path,
         )
         stochastic_mappings_dir = f"{output_dir}/stochastic_mappings/"
-        ChromevolExecutor._parse_stochastic_mappings(
-            input_dir=output_dir, output_dir=stochastic_mappings_dir
-        )
+        ChromevolExecutor._parse_stochastic_mappings(input_dir=output_dir, output_dir=stochastic_mappings_dir)
         chromevol_output = ChromevolOutput(
             result_path=result_path,
             expected_events_path=expected_events_path,
@@ -349,12 +308,8 @@ class ChromevolExecutor:
             if res != 0:
                 res = ChromevolExecutor._retry(input_args=input_args)
                 if res != 0:
-                    logger.warning(
-                        f"retry failed execute chromevol on {chromevol_input.input_path}"
-                    )
+                    logger.warning(f"retry failed execute chromevol on {chromevol_input.input_path}")
                     return chromevol_output
         if os.path.exists(raw_output_path):
-            chromevol_output = ChromevolExecutor._parse_output(
-                chromevol_input.output_dir
-            )
+            chromevol_output = ChromevolExecutor._parse_output(chromevol_input.output_dir)
         return chromevol_output
