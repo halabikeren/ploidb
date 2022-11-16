@@ -71,21 +71,21 @@ logger = logging.getLogger(__name__)
     help="indicator weather thresholds should be optimized based on simulations",
     type=bool,
     required=False,
-    default=False, # change to false for unfinished jobs
+    default=False,  # change to false for unfinished jobs
 )
 @click.option(
     "--diploidy_threshold",
     help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as diploids",
     type=click.FloatRange(min=0, max=1),
     required=False,
-    default=0.4,
+    default=0.25,
 )
 @click.option(
     "--polyploidy_threshold",
     help="threshold between 0 and 1 for the frequency of polyploidy support across mappings for taxa to be deemed as polyploids",
     type=click.FloatRange(min=0, max=1),
     required=False,
-    default=0.6,
+    default=0.75,
 )
 @click.option(
     "--queue",
@@ -108,6 +108,13 @@ logger = logging.getLogger(__name__)
     required=False,
     default=1000,
 )
+@click.option(
+    "--allow_base_num_parameter",
+    help="indicator if we allow the selected model to include base number parameter or not",
+    type=bool,
+    required=False,
+    default=True,
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -123,10 +130,13 @@ def exec_ploidb_pipeline(
     debug_sim_num: bool,
     max_parallel_jobs: int,
     ploidy_classification_path: str,
+    allow_base_num_parameter: bool,
 ):
 
     if ploidy_classification_path is None:
-        ploidy_classification_path = f"{output_dir}/ploidy.csv"
+        ploidy_classification_path = (
+            f"{output_dir}/ploidy{'_without_base_num' if not allow_base_num_parameter else ''}.csv"
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -141,26 +151,29 @@ def exec_ploidb_pipeline(
     start_time = timer()
 
     os.makedirs(output_dir, exist_ok=True)
-    pipeline = Pipeline(work_dir=output_dir,
-                        parallel=parallel,
-                        ram_per_job=ram_per_job,
-                        queue=queue,
-                        max_parallel_jobs=max_parallel_jobs)
+    pipeline = Pipeline(
+        work_dir=output_dir,
+        parallel=parallel,
+        ram_per_job=ram_per_job,
+        queue=queue,
+        max_parallel_jobs=max_parallel_jobs,
+    )
 
     logger.info(f"selecting the best chromevol model")
     best_model_results_path = pipeline.get_best_model(
         counts_path=counts_path,
         tree_path=tree_path,
+        allow_base_num_parameter=allow_base_num_parameter,
     )
 
     if optimize_thresholds:
         logger.info(f"searching for optimal classification thresholds")
     else:
-        logger.info(f"determining ploidy level based on the fixed diploidy and polyploidy thresholds {diploidy_threshold} and {polyploidy_threshold}")
+        logger.info(
+            f"determining ploidy level based on the fixed diploidy and polyploidy thresholds {diploidy_threshold} and {polyploidy_threshold}"
+        )
     taxonomic_classification = (
-        pd.read_csv(taxonomic_classification_path)
-        if taxonomic_classification_path is not None
-        else None
+        pd.read_csv(taxonomic_classification_path) if taxonomic_classification_path is not None else None
     )
     test_ploidy_classification = pipeline.get_ploidy_classification(
         counts_path=counts_path,

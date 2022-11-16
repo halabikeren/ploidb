@@ -22,7 +22,9 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from data_generation.chromevol import (
     model_parameters,
     models,
-    most_complex_model,
+    models_without_base_num,
+    most_complex_model_with_base_num,
+    most_complex_model_without_base_num,
     ChromevolOutput,
 )
 from services.pbs_service import PBSService
@@ -119,7 +121,9 @@ class Pipeline:
         return 0
 
     @staticmethod
-    def _create_models_input_files(tree_path: str, counts_path: str, work_dir: str) -> dict:
+    def _create_models_input_files(
+        tree_path: str, counts_path: str, work_dir: str, allow_base_num_parameter: bool = True
+    ) -> dict:
         model_to_io = dict()
         base_input_ags = {
             "tree_path": tree_path,
@@ -127,7 +131,8 @@ class Pipeline:
             "num_of_simulations": 0,
             "run_stochastic_mapping": False,
         }
-        for model in models:
+        model_options = models if allow_base_num_parameter else models_without_base_num
+        for model in model_options:
             model_name = "_".join([param.input_name for param in model])
             model_dir = f"{os.path.abspath(work_dir)}/{model_name}/"
             os.makedirs(model_dir, exist_ok=True)
@@ -156,6 +161,7 @@ class Pipeline:
             with open(model_output_path, "r") as outfile:
                 model_output = ChromevolOutput(**json.load(fp=outfile))
             model_score = model_output.model_score
+            logger.info(f"model={model_name} has score of {model_score}")
             if model_score < winning_model_score:
                 winning_model, winning_model_score = model_output_path, model_score
         logger.info(f"the selected model is {winning_model} with a score of {winning_model_score}")
@@ -167,6 +173,7 @@ class Pipeline:
         self,
         counts_path: str,
         tree_path: str,
+        allow_base_num_parameter: bool = True,
     ) -> str:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
@@ -174,10 +181,14 @@ class Pipeline:
             tree_path=tree_path,
             counts_path=counts_path,
             work_dir=model_selection_work_dir,
+            allow_base_num_parameter=allow_base_num_parameter,
         )
         input_to_output = {
             model_to_io[model_name]["input_path"]: model_to_io[model_name]["output_path"] for model_name in model_to_io
         }
+        most_complex_model = (
+            most_complex_model_with_base_num if allow_base_num_parameter else most_complex_model_without_base_num
+        )
         most_complex_model_input_path = model_to_io[most_complex_model]["input_path"]
         res = os.system(f"rm -rf {model_selection_work_dir}/jobs/")
         res = os.system(f"rm -rf {model_selection_work_dir}/jobs_output/")
@@ -1031,6 +1042,20 @@ class Pipeline:
             ploidy_classification["Ploidy transitions frequency"] = np.nan
             ploidy_classification["Ploidy transitions frequency"].fillna(
                 value=taxon_to_polyploidy_support.set_index("NODE")["polyploidy_frequency"].to_dict(), inplace=True
+            )
+
+            def get_classification_reliability(record: pd.Series) -> float:
+                ploidy_level = record["Ploidy inference"]
+                if pd.isna(ploidy_level):
+                    return np.nan
+                bound = 0 if ploidy_level == 0 else 1
+                thr = diploidy_threshold if ploidy_level == 0 else polyploidy_threshold
+                max_diff = abs(thr - bound)
+                thr_diff = abs(record["Ploidy transitions frequency"] - thr)
+                return thr_diff / max_diff
+
+            ploidy_classification["Ploidy classification reliability"] = ploidy_classification.apply(
+                get_classification_reliability, axis=1
             )
 
             ploidy_classification["frequency_of_successful_mappings"] = np.nan
