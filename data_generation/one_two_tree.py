@@ -103,7 +103,7 @@ class OneTwoTreeExecutor:
     @staticmethod
     def run(input_args: Dict[str, str]) -> OneTwoTreeOutput:
         one_two_tree_input = OneTwoTreeExecutor._get_input(input_args=input_args)
-        raw_output_path = f"{one_two_tree_input.output_dir}processed_tree.nwk"
+        raw_output_path = f"OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
         if not os.path.exists(raw_output_path):
             res = OneTwoTreeExecutor._exec(exe_input=one_two_tree_input)
             if res != 0:
