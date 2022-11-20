@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import List
+from typing import List, Optional
 import getpass
 import subprocess
 from time import sleep
@@ -93,15 +93,17 @@ class PBSService:
         return jobs_paths
 
     @staticmethod
-    def retry_memory_failures(jobs_paths: list[str], jobs_output_dir: str) -> list[str]:
+    def retry_memory_failures(jobs_paths: list[str], jobs_output_dir: Optional[str] = None) -> list[str]:
         jobs_ids = []
         mem_re = re.compile("mem=(\d*)gb")
+        job_output_path_re = re.compile("#PBS -o (.*?)\n", re.DOTALL)
         for job_path in jobs_paths:
             job_output_path = f"{jobs_output_dir}/{os.path.basename(job_path).replace('.sh', '.out')}"
+            if jobs_output_dir is None:
+                with open(job_path, "r") as f:
+                    job_output_path = job_output_path_re.search(f.read()).group(1)
             if not os.path.exists(job_output_path):
-                res = subprocess.check_output(
-                    ["qsub", f"{job_path}"]
-                )
+                res = subprocess.check_output(["qsub", f"{job_path}"])
                 jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
             else:
                 with open(job_output_path, "r") as f:
@@ -114,34 +116,26 @@ class PBSService:
                     jc = jc.replace(f"{mem}gb", f"{new_mem}gb")
                     with open(job_path, "w") as jf:
                         jf.write(jc)
-                    res = subprocess.check_output(
-                        ["qsub", f"{job_path}"]
-                    )
+                    res = subprocess.check_output(["qsub", f"{job_path}"])
                     jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
             if os.path.exists(job_output_path):
                 os.remove(job_output_path)
         return jobs_ids
 
     @staticmethod
-    def submit_jobs(
-        jobs_paths: List[str], max_parallel_jobs: int = 30, queue: str = "itaym"
-    ) -> list[str]:
+    def submit_jobs(jobs_paths: List[str], max_parallel_jobs: int = 30, queue: str = "itaym") -> list[str]:
         job_index = 0
         jobs_ids = []
         while job_index < len(jobs_paths):
             while PBSService.compute_curr_jobs_num() > max_parallel_jobs:
                 sleep(2 * 60)
             try:
-                res = subprocess.check_output(
-                    ["qsub", "-q", queue, f"{jobs_paths[job_index]}"]
-                )
+                res = subprocess.check_output(["qsub", "-q", queue, f"{jobs_paths[job_index]}"])
                 logger.info(f"job = {jobs_paths[job_index]}, res = {res}")
                 jobs_ids.append(re.search("(\d+)\.power\d", str(res)).group(1))
                 job_index += 1
             except Exception as e:
-                logger.error(
-                    f"failed to submit job at index {job_index} due to error {e}"
-                )
+                logger.error(f"failed to submit job at index {job_index} due to error {e}")
                 exit(1)
             if job_index % 500 == 0:
                 logger.info(f"submitted {job_index} jobs thus far")
@@ -149,20 +143,10 @@ class PBSService:
 
     @staticmethod
     def wait_for_jobs(jobs_ids: List[str]):
-        jobs_complete = np.all(
-            [
-                os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0
-                for job_id in jobs_ids
-            ]
-        )
+        jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
         while not jobs_complete:
             sleep(60)
-            jobs_complete = np.all(
-                [
-                    os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0
-                    for job_id in jobs_ids
-                ]
-            )
+            jobs_complete = np.all([os.system(f"qstat -f {job_id} > /dev/null 2>&1") != 0 for job_id in jobs_ids])
 
     @staticmethod
     def execute_job_array(
@@ -187,14 +171,12 @@ class PBSService:
                 queue=queue,
                 priority=priority,
             )
-            jobs_ids = PBSService.submit_jobs(
-                jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs, queue=queue
-            )
+            jobs_ids = PBSService.submit_jobs(jobs_paths=jobs_paths, max_parallel_jobs=max_parallel_jobs, queue=queue)
             done = False
             while not done:
                 PBSService.wait_for_jobs(jobs_ids=jobs_ids)
                 job_ids = PBSService.retry_memory_failures(jobs_paths=jobs_paths, jobs_output_dir=output_dir)
-                done = (len(job_ids) == 0)
+                done = len(job_ids) == 0
 
         # # remove work dir
         # shutil.rmtree(work_dir, ignore_errors=True)
