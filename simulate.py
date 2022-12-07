@@ -118,7 +118,7 @@ def simulate(
 
 
     logger.info(f"selecting the best chromevol model")
-    best_model_results_path = pipeline.get_best_model(
+    best_model_results_path = pipeline.get_model_weights(
         counts_path=counts_path,
         tree_path=tree_path,
     )
