@@ -5,7 +5,7 @@ Filter_SubSp:on
 Merge_Subsp:off
 Filter_Hybrids:on
 Filter_Unresolved:on
-NameResType:None
+NameResType:MatchedNames
 NR_DB_name:NCBI
 OriginJobID:None
 OriginJobDir:

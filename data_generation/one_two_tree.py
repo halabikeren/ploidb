@@ -83,18 +83,20 @@ class OneTwoTreeExecutor:
     @staticmethod
     def _parse_output(one_two_tree_input: OneTwoTreeInput) -> OneTwoTreeOutput:
         output_path = f"OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
-        res = os.system(f"cd {one_two_tree_input.output_dir}; unzip {output_path}")
+        res = os.system(f"cd {one_two_tree_input.output_dir}; unzip -o {output_path}")
         tree_path = f"{one_two_tree_input.output_dir}Result_Tree_{one_two_tree_input.job_name}.tre"
         covered_taxa_path = f"{one_two_tree_input.output_dir}FinalSpeciesList.txt"
         summary_path = f"{one_two_tree_input.output_dir}summary_file.txt"
         selected_out_group_regex = re.compile("Selected Outgroup\:\s*(.*?)\n", re.DOTALL)
         with open(summary_path, "r") as f:
-            out_group_name = selected_out_group_regex.search(f.read())
+            out_group_name = selected_out_group_regex.search(f.read()).group(1)
         with open(covered_taxa_path, "r") as f:
             covered_taxa = [s.replace("\n", "") for s in f.readlines()]
         tree = Tree(tree_path, format=5)
         non_out_group_leaves = list(set(tree.get_leaf_names()) - {out_group_name})
         tree.prune(non_out_group_leaves, preserve_branch_length=True)
+        for l in tree.get_leaves():
+            l.name = l.name.replace("_", " ")
         assert set(tree.get_leaf_names()) == set(covered_taxa)
         output_tree_path = f"{one_two_tree_input.output_dir}/processed_tree.nwk"
         tree.write(outfile=output_tree_path)
@@ -103,7 +105,7 @@ class OneTwoTreeExecutor:
     @staticmethod
     def run(input_args: Dict[str, str]) -> OneTwoTreeOutput:
         one_two_tree_input = OneTwoTreeExecutor._get_input(input_args=input_args)
-        raw_output_path = f"OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
+        raw_output_path = f"{one_two_tree_input.output_dir}OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
         if not os.path.exists(raw_output_path):
             res = OneTwoTreeExecutor._exec(exe_input=one_two_tree_input)
             if res != 0:

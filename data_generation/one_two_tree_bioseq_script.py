@@ -17,7 +17,7 @@ def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, fil
         handle.write("#PBS -r y\n")
         # handle.write("#PBS -q itaym\n")
         handle.write(f"#PBS -q {queue}\n")
-        handle.write("#PBS -l select=1:ncpus=2:mem=1gb\n")
+        handle.write("#PBS -l select=1:ncpus=2:mem=4gb\n")
         handle.write("#PBS -v PBS_O_SHELL=bash,PBS_ENVIRONMENT=PBS_BATCH\n")
         handle.write("#PBS -e " + output_path + "\n")
         handle.write("#PBS -o " + output_path + "\n")
