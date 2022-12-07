@@ -11,6 +11,7 @@ import pandas as pd
 import pickle
 
 from dotenv import load_dotenv, find_dotenv
+from ete3 import Tree
 
 load_dotenv(find_dotenv())
 
@@ -259,11 +260,110 @@ class ChromevolExecutor:
             logger.info(f"expectations computation was not conduced in this execution")
 
     @staticmethod
-    def _parse_stochastic_mappings(input_dir: str, output_dir: str):
-        os.makedirs(output_dir, exist_ok=True)
+    def _get_event_type(src_state: int, dst_state: int) -> str:
+        if src_state + 1 == dst_state:
+            return "GAIN"
+        elif src_state - 1 == dst_state:
+            return "LOSS"
+        elif src_state * 2 == dst_state:
+            return "DUPLICATION"
+        elif src_state * 1.5 == dst_state:
+            return "DEMI-DUPLICATION"
+        elif dst_state == 200:
+            return "TOMAX"
+        return "BASE-NUMBER"
+
+    @staticmethod
+    def parse_ml_tree(tree_path: str, scaling_factor: float) -> Tree:
+        tree = Tree(tree_path, format=1)
+        for node in tree.traverse():
+            node.name = "-".join(node.name.split("-")[:-1])
+            node.dist = node.dist / scaling_factor
+        return tree
+
+    @staticmethod
+    def parse_evolutionary_path(input_path: str, output_path: str, tree: Tree) -> int:
+        branch_id_regex = re.compile("(.*?)\nFather is\: (.*?)\n")
+        transition_regex = re.compile("from state\:\s*(\d*)\s*t\s*=\s*(\d*\.?\d*)\s*to\s*state\s*=\s*(\d*)")
+
+        event_ages_dfs = []
+        with open(input_path, "r") as f:
+            history_paths = f.read().split("*************************************")
+        for path in history_paths:
+            branch_id_match = branch_id_regex.search(path)
+            if branch_id_match is None:
+                continue
+            branch_child = branch_id_match.group(1).replace("N-", "N")
+            branch_parent = branch_id_match.group(2).replace("N-", "N")
+            child = tree.search_nodes(name=branch_child)[0]
+            parent = tree.search_nodes(name=branch_parent)[0]
+            base_age = parent.get_distance(parent.get_leaves()[0])
+            curr_age = base_age
+            for match in transition_regex.finditer(path):
+                src_state = int(match.group(1))
+                relative_contribution = float(match.group(2))
+                absolute_contribution = child.dist * relative_contribution
+                curr_age -= absolute_contribution
+                dst_state = int(match.group(3))
+                event_type = ChromevolExecutor._get_event_type(src_state, dst_state)
+                event_ages_dfs.append(
+                    pd.DataFrame.from_dict(
+                        {
+                            "age": curr_age,
+                            "branch_parent_name": branch_parent,
+                            "branch_child_name": branch_child,
+                            "event_type": event_type,
+                            "src_state": src_state,
+                            "dst_state": dst_state,
+                            "is_child_external": tree.search_nodes(name=branch_child)[0].is_leaf(),
+                        },
+                        orient="index",
+                    ).transpose()
+                )
+
+        if len(event_ages_dfs) > 0:
+            event_ages = pd.concat(event_ages_dfs)
+            event_ages.to_csv(output_path, index=False)
+        return 0
+
+    @staticmethod
+    def _parse_simulations(input_dir: str, evolutionary_paths_dir: str):
+        pass
+
+    @staticmethod
+    def _parse_stochastic_mappings(input_dir: str, mappings_dir: str, evolutionary_paths_dir: str):
+        os.makedirs(mappings_dir, exist_ok=True)
         for path in os.listdir(input_dir):
             if path.endswith(".csv"):
-                os.rename(f"{input_dir}/{path}", f"{output_dir}/{path}")
+                os.rename(f"{input_dir}/{path}", f"{mappings_dir}/{path}")
+        res = os.system(
+            f"cd {input_dir};zip -r stochastic_mappings.zip stochastic_mappings/;rm -rf ./stochastic_mappings/"
+        )
+
+        os.makedirs(evolutionary_paths_dir, exist_ok=True)
+        raw_evolutionary_paths_dir = f"{input_dir}raw_evolutionary_paths/"
+        os.makedirs(raw_evolutionary_paths_dir, exist_ok=True)
+
+        tree_path = f"{input_dir}MLAncestralReconstruction.tree"
+        with open(f"{input_dir}sm_params.json", "r") as f:
+            scaling_factor = float(json.load(f)["tree_scaling_factor"])
+        tree = ChromevolExecutor.parse_ml_tree(tree_path=tree_path, scaling_factor=scaling_factor)
+
+        for path in os.listdir(input_dir):
+            if path.startswith("evoPathMapping_"):
+                index = path.replace("evoPathMapping_", "").replace(".txt", "")
+                input_path = f"{input_dir}{path}"
+                output_path = f"{evolutionary_paths_dir}events_by_age_simulations_{index}.csv"
+                res = ChromevolExecutor.parse_evolutionary_path(
+                    input_path=input_path, output_path=output_path, tree=tree
+                )
+                res = os.system(f"mv {input_path} {raw_evolutionary_paths_dir}")
+        res = os.system(
+            f"cd {input_dir};zip -r raw_evolutionary_paths.zip ./raw_evolutionary_paths; rm -rf ./raw_evolutionary_paths/"
+        )
+        res = os.system(
+            f"cd {input_dir};zip -r evolutionary_paths.zip ./evolutionary_paths; rm -rf ./evolutionary_paths/"
+        )
 
     @staticmethod
     def _parse_output(output_dir: str) -> ChromevolOutput:
@@ -282,7 +382,14 @@ class ChromevolExecutor:
             output_path=expected_events_path,
         )
         stochastic_mappings_dir = f"{output_dir}/stochastic_mappings/"
-        ChromevolExecutor._parse_stochastic_mappings(input_dir=output_dir, output_dir=stochastic_mappings_dir)
+        sm_input_path = f"{output_dir}/sm_params.json"
+        if os.path.exists(sm_input_path):
+            stochastic_evolutionary_paths_dir = f"{output_dir}/evolutionary_paths/"
+            ChromevolExecutor._parse_stochastic_mappings(
+                input_dir=output_dir,
+                mappings_dir=stochastic_mappings_dir,
+                evolutionary_paths_dir=stochastic_evolutionary_paths_dir,
+            )
         chromevol_output = ChromevolOutput(
             result_path=result_path,
             expected_events_path=expected_events_path,
@@ -301,6 +408,7 @@ class ChromevolExecutor:
     @staticmethod
     def run(input_args: Dict[str, str]) -> ChromevolOutput:
         chromevol_input = ChromevolExecutor._get_input(input_args=input_args)
+        chromevol_input.parameters["base_num"] = max(chromevol_input.parameters["base_num"], 6)
         raw_output_path = f"{chromevol_input.output_dir}/chromEvol.res"
         if not os.path.exists(raw_output_path):
             res = ChromevolExecutor._exec(chromevol_input_path=chromevol_input.input_path)

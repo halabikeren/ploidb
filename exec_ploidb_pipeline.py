@@ -115,6 +115,13 @@ logger = logging.getLogger(__name__)
     required=False,
     default=True,
 )
+@click.option(
+    "--use_model_selection",
+    help="indicator if we allow the selected model to include base number parameter or not",
+    type=bool,
+    required=False,
+    default=True,
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -131,6 +138,7 @@ def exec_ploidb_pipeline(
     max_parallel_jobs: int,
     ploidy_classification_path: str,
     allow_base_num_parameter: bool,
+    use_model_selection: bool,
 ):
 
     if ploidy_classification_path is None:
@@ -160,10 +168,11 @@ def exec_ploidb_pipeline(
     )
 
     logger.info(f"selecting the best chromevol model")
-    best_model_results_path = pipeline.get_best_model(
+    model_path_to_weight = pipeline.get_model_weights(
         counts_path=counts_path,
         tree_path=tree_path,
         allow_base_num_parameter=allow_base_num_parameter,
+        use_model_selection=use_model_selection,
     )
 
     if optimize_thresholds:
@@ -175,16 +184,18 @@ def exec_ploidb_pipeline(
     taxonomic_classification = (
         pd.read_csv(taxonomic_classification_path) if taxonomic_classification_path is not None else None
     )
+
     test_ploidy_classification = pipeline.get_ploidy_classification(
         counts_path=counts_path,
         tree_path=tree_path,
-        model_parameters_path=best_model_results_path,
+        weighted_models_parameters_paths=model_path_to_weight,
         mappings_num=1000,
         taxonomic_classification_data=taxonomic_classification,
         diploidy_threshold=diploidy_threshold,
         polyploidy_threshold=polyploidy_threshold,
         optimize_thresholds=optimize_thresholds,
         debug=debug_sim_num,
+        use_model_selection=use_model_selection,
     )
     test_ploidy_classification.to_csv(ploidy_classification_path, index=False)
     pipeline.write_labeled_phyloxml_tree(
