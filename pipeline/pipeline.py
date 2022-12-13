@@ -67,7 +67,7 @@ class Pipeline:
         input_to_jobs_commands = dict()
         for input_path in input_to_output:
             if not os.path.exists(input_to_output[input_path]):
-                if input_to_run_in_main and input_path == input_to_run_in_main:
+                if input_to_run_in_main and input_path == input_to_run_in_main or os.path.exists(f"{os.path.dirname(input_path)}/failed_retry.touch"):
                     continue
                 input_to_jobs_commands[input_path] = [
                     os.getenv("CONDA_ACT_CMD"),
@@ -75,7 +75,7 @@ class Pipeline:
                     f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_path}",
                 ]
         main_cmd = None
-        if input_to_run_in_main and not os.path.exists(input_to_output[input_to_run_in_main]):
+        if input_to_run_in_main and not os.path.exists(input_to_output[input_to_run_in_main]) and not os.path.exists(f"{os.path.dirname(input_to_run_in_main)}/failed_retry.touch"):
             main_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {command_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_to_run_in_main}"
 
         logger.info(
@@ -113,6 +113,7 @@ class Pipeline:
                     res = os.system(";".join(job_commands_set))
                     if not os.path.exists(input_to_output[input_path]):
                         logger.error(f"execution of {input_path} fit failed after retry")
+                        res = os.system(f"touch {os.path.dirname(input_path)}/failed_retry.touch")
             # in any case, run the main command from the parent process
 
         if main_cmd is not None:
@@ -286,6 +287,10 @@ class Pipeline:
         if not os.path.exists(sm_work_dir) and os.path.exists(sm_zip_path):
             logger.info(f"unpacking zipped stochastic mappings path {sm_zip_path} to {os.path.dirname(sm_zip_path)}")
             shutil.unpack_archive(sm_zip_path, os.path.dirname(sm_zip_path))
+            if output_dir_suffix is not None: # model weighting is used, remove any files basd on model selection in the main dir
+                for path in os.listdir(sm_work_dir):
+                    if not path.startswith("gain_"):
+                        res = os.system(f"rm -rf {sm_work_dir}{path}")
         if output_dir_suffix:
             sm_work_dir += f"{output_dir_suffix}/"
         os.makedirs(sm_work_dir, exist_ok=True)
@@ -692,6 +697,7 @@ class Pipeline:
             Pipeline._pick_successful_simulations(simulations_dir=simulations_dir, simulations_num=simulations_num)
 
         successful_simulations_dirs = []
+        logger.info(f"parsing simulations at {simulations_dir}")
         for path in os.listdir(simulations_dir):
             try:
                 is_sim_path = int(path)
@@ -718,9 +724,7 @@ class Pipeline:
         with open(parameters_path, "r") as f:
             scaling_factor = json.load(f)["tree_scaling_factor"]
         tree = ChromevolExecutor.parse_ml_tree(tree_path=tree_path, scaling_factor=scaling_factor)
-        res = ChromevolExecutor.parse_evolutionary_path(
-            input_path=simulated_evolution_path, output_path=processed_simulation_evolutionary_path, tree=tree
-        )
+        res = ChromevolExecutor.parse_evolutionary_path(input_path=simulated_evolution_path, output_path=processed_simulation_evolutionary_path, tree=tree, tree_scaling_factor=scaling_factor)
         evolutionary_data = pd.read_csv(processed_simulation_evolutionary_path)
         evolutionary_data["is_ploidy_transition"] = evolutionary_data.apply(
             lambda record: record.event_type in ["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"], axis=1
@@ -941,29 +945,35 @@ class Pipeline:
         evol_paths_in_main = [p for p in os.listdir(sm_work_dir) if p.startswith("evoPathMapping_")]
         if len(evol_paths_in_main) > 0:
             logger.info(f"raw evolutionary paths found in main stochastic mapping dir")
-            if not os.path.exists(raw_evolutionary_paths_dir) and os.path.exists(raw_evolutionary_paths_zip_path):
+        if not os.path.exists(raw_evolutionary_paths_dir):
+            if os.path.exists(raw_evolutionary_paths_zip_path):
                 logger.info(
                     f"unpacking {raw_evolutionary_paths_zip_path} to {os.path.dirname(raw_evolutionary_paths_zip_path)}")
                 shutil.unpack_archive(raw_evolutionary_paths_zip_path, os.path.dirname(raw_evolutionary_paths_zip_path))
-            if not os.path.exists(processed_evolutionary_paths_dir) and os.path.exists(
-                    processed_evolutionary_paths_zip_path):
+            else:
+                os.makedirs(raw_evolutionary_paths_dir, exist_ok=True)
+        if not os.path.exists(processed_evolutionary_paths_dir):
+            if os.path.exists(
+                processed_evolutionary_paths_zip_path):
                 logger.info(
                     f"unpacking {processed_evolutionary_paths_zip_path} to {os.path.dirname(processed_evolutionary_paths_zip_path)}")
                 shutil.unpack_archive(processed_evolutionary_paths_zip_path,
                                       os.path.dirname(processed_evolutionary_paths_zip_path))
-            for path in evol_paths_in_main:
-                os.rename(f"{sm_work_dir}{path}", f"{raw_evolutionary_paths_dir}{path}")
-                mapping_index = path.replace("evoPathMapping_", "").replace(".txt", "")
-                respective_processed_path = f"{processed_evolutionary_paths_dir}events_by_age_simulations_{mapping_index}.csv"
-                alternative_named_respective_processed_path = respective_processed_path.replace(".csv", ".txt.csv")
-                if not os.path.exists(respective_processed_path):
-                    if os.path.exists(alternative_named_respective_processed_path):
-                        os.rename(alternative_named_respective_processed_path, respective_processed_path)
-                    else:
-                        res = ChromevolExecutor.parse_evolutionary_path(
-                            input_path=f"{raw_evolutionary_paths_dir}{path}",
-                            output_path=respective_processed_path,
-                            tree=ml_tree)
+            else:
+                os.makedirs(processed_evolutionary_paths_dir, exist_ok=True)
+        for path in evol_paths_in_main:
+            os.rename(f"{sm_work_dir}{path}", f"{raw_evolutionary_paths_dir}{path}")
+        for path in os.listdir(raw_evolutionary_paths_dir):
+            mapping_index = path.replace("evoPathMapping_", "").replace(".txt", "")
+            respective_processed_path = f"{processed_evolutionary_paths_dir}events_by_age_simulations_{mapping_index}.csv"
+            alternative_named_respective_processed_path = respective_processed_path.replace(".csv", ".txt.csv")
+            if os.path.exists(alternative_named_respective_processed_path):
+                os.remove(alternative_named_respective_processed_path)
+            res = ChromevolExecutor.parse_evolutionary_path(
+                    input_path=f"{raw_evolutionary_paths_dir}{path}",
+                    output_path=respective_processed_path,
+                    tree=ml_tree,
+                    tree_scaling_factor=scaling_factor)
 
         logger.info(f"packing raw evolutionary paths")
         res = os.system(
@@ -1036,16 +1046,19 @@ class Pipeline:
         diploidy_threshold: float = 0.4,
     ) -> dict[str, int]:  # 0 - diploid, 1 - polyploid, np.nan - unable to determine
 
-        tree_with_internal_names_path = (
-            f"{self.work_dir}/stochastic_mapping/MLAncestralReconstruction.tree"
-        )
-        if not os.path.exists(tree_with_internal_names_path):
-            first_model_name = os.listdir(f"{self.work_dir}/stochastic_mapping/")[0]
-            tree_with_internal_names_path = f"{self.work_dir}/stochastic_mapping/{first_model_name}/MLAncestralReconstruction.tree"
-        full_tree = Tree(tree_with_internal_names_path, format=1)
-        for node in full_tree.traverse():
-            if "-" in node.name:
-                node.name = "-".join(node.name.split("-")[:-1])
+        sm_work_dir = f"{self.work_dir}stochastic_mapping/"
+        full_tree = None
+        if os.path.exists(sm_work_dir):
+            tree_with_internal_names_path = (
+                f"{sm_work_dir}MLAncestralReconstruction.tree"
+            )
+            if not os.path.exists(tree_with_internal_names_path):
+                first_model_name = os.listdir(sm_work_dir)[0]
+                tree_with_internal_names_path = f"{sm_work_dir}{first_model_name}/MLAncestralReconstruction.tree"
+            full_tree = Tree(tree_with_internal_names_path, format=1)
+            for node in full_tree.traverse():
+                if "-" in node.name:
+                    node.name = "-".join(node.name.split("-")[:-1])
 
         taxon_to_polyploidy_support["is_polyploid"] = (
             taxon_to_polyploidy_support["polyploidy_frequency"] >= polyploidy_threshold
