@@ -141,7 +141,7 @@ class ChromevolExecutor:
 
     @staticmethod
     def _exec(chromevol_input_path: str) -> int:
-        cmd = f"{os.getenv('CONDA_ACT_CMD')};cd {os.path.dirname(chromevol_input_path)};{os.getenv('CHROMEVOL_EXEC')} param={os.path.abspath(chromevol_input_path)}"
+        cmd = f"{os.getenv('CONDA_ACT_CMD')};cd {os.path.dirname(chromevol_input_path)};{os.getenv('CHROMEVOL_EXEC')} param={os.path.abspath(chromevol_input_path)} > {os.path.dirname(os.path.abspath(chromevol_input_path))}/chromevol.log"
         cmd.replace("//", "/")
         res = os.system(cmd)
         return res
@@ -287,7 +287,7 @@ class ChromevolExecutor:
         transition_regex = re.compile("from state\:\s*(\d*)\s*t\s*=\s*(\d*\.?\d*)\s*to\s*state\s*=\s*(\d*)")
         node_to_is_external = {node.name: node.is_leaf() for node in tree.traverse()}
         tree_length = tree.get_distance(tree.get_leaves()[0])
-        node_is_legal = {node.name: node.dist < (tree_length/2) for node in tree.traverse()}
+        node_is_legal = {node.name: node.dist < (tree_length / 2) for node in tree.traverse()}
         event_ages_dfs = []
         with open(input_path, "r") as f:
             history_paths = f.read().split("*************************************")
@@ -302,20 +302,22 @@ class ChromevolExecutor:
             base_age = parent.get_distance(parent.get_leaves()[0])
             curr_age = base_age
             min_age = child.get_distance(child.get_leaves()[0])
-            assert (np.round(child.dist,3) == np.round(base_age-min_age, 3))
+            assert np.round(child.dist, 1) == np.round(base_age - min_age, 1)
             transitions = [match for match in transition_regex.finditer(path)]
             src_states = [int(match.group(1)) for match in transitions]
             dst_states = [int(match.group(3)) for match in transitions]
-            time_to_transition = np.array([float(match.group(2))/tree_scaling_factor for match in transitions])
-            branch_length = base_age-min_age
+            time_to_transition = np.array([float(match.group(2)) / tree_scaling_factor for match in transitions])
+            branch_length = base_age - min_age
             sum_of_transitions = np.sum(time_to_transition)
-            if np.round(sum_of_transitions,3) > np.round(branch_length,3):
-                logger.info(f"the sum of transitions along branch ({parent.name}, {child.name}) adds up to more than {sum_of_transitions}, suggesting that the branch was stretched, and will thus be ignored")
+            if np.round(sum_of_transitions, 3) > np.round(branch_length, 3):
+                logger.info(
+                    f"the sum of transitions along branch ({parent.name}, {child.name}) adds up to more than {sum_of_transitions}, suggesting that the branch was stretched, and will thus be ignored"
+                )
                 continue
             for i in range(len(transitions)):
                 src_state = src_states[i]
                 curr_age -= time_to_transition[i]
-                assert (np.round(curr_age, 3) >= np.round(min_age,3))
+                assert np.round(curr_age, 3) >= np.round(min_age, 3)
                 dst_state = dst_states[i]
                 event_type = ChromevolExecutor._get_event_type(src_state, dst_state)
                 event_ages_dfs.append(
@@ -328,7 +330,7 @@ class ChromevolExecutor:
                             "src_state": src_state,
                             "dst_state": dst_state,
                             "is_child_external": node_to_is_external.get(branch_child, np.nan),
-                            "is_legal": node_is_legal.get(branch_child, np.nan)
+                            "is_legal": node_is_legal.get(branch_child, np.nan),
                         },
                         orient="index",
                     ).transpose()
