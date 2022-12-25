@@ -67,7 +67,11 @@ class Pipeline:
         input_to_jobs_commands = dict()
         for input_path in input_to_output:
             if not os.path.exists(input_to_output[input_path]):
-                if input_to_run_in_main and input_path == input_to_run_in_main or os.path.exists(f"{os.path.dirname(input_path)}/failed_retry.touch"):
+                if (
+                    input_to_run_in_main
+                    and input_path == input_to_run_in_main
+                    or os.path.exists(f"{os.path.dirname(input_path)}/failed_retry.touch")
+                ):
                     continue
                 input_to_jobs_commands[input_path] = [
                     os.getenv("CONDA_ACT_CMD"),
@@ -75,7 +79,11 @@ class Pipeline:
                     f"python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_path}",
                 ]
         main_cmd = None
-        if input_to_run_in_main and not os.path.exists(input_to_output[input_to_run_in_main]) and not os.path.exists(f"{os.path.dirname(input_to_run_in_main)}/failed_retry.touch"):
+        if (
+            input_to_run_in_main
+            and not os.path.exists(input_to_output[input_to_run_in_main])
+            and not os.path.exists(f"{os.path.dirname(input_to_run_in_main)}/failed_retry.touch")
+        ):
             main_cmd = f"{os.getenv('CONDA_ACT_CMD')}; cd {command_dir};python {os.path.dirname(__file__)}/run_chromevol.py --input_path={input_to_run_in_main}"
 
         logger.info(
@@ -287,7 +295,9 @@ class Pipeline:
         if not os.path.exists(sm_work_dir) and os.path.exists(sm_zip_path):
             logger.info(f"unpacking zipped stochastic mappings path {sm_zip_path} to {os.path.dirname(sm_zip_path)}")
             shutil.unpack_archive(sm_zip_path, os.path.dirname(sm_zip_path))
-            if output_dir_suffix is not None: # model weighting is used, remove any files basd on model selection in the main dir
+            if (
+                output_dir_suffix is not None
+            ):  # model weighting is used, remove any files basd on model selection in the main dir
                 for path in os.listdir(sm_work_dir):
                     if not path.startswith("gain_"):
                         res = os.system(f"rm -rf {sm_work_dir}{path}")
@@ -523,8 +533,9 @@ class Pipeline:
             lambda path: Pipeline._parse_mapping(path=path, tree_with_states=tree_with_states)
         )
         mappings = [pd.read_csv(path) for path in mappings_paths["processed_mapping_path"].tolist()]
-        processed_mappings_data = pd.concat(mappings).groupby("NODE").mean().reset_index()
-        processed_mappings_data.to_csv(processed_mappings_path, index=False)
+        if len(mappings) > 0:
+            processed_mappings_data = pd.concat(mappings).groupby("NODE").mean().reset_index()
+            processed_mappings_data.to_csv(processed_mappings_path, index=False)
         for mapping in mappings:
             missing_data_fraction = mapping.isna().sum().sum() / (mapping.shape[0] * mapping.shape[1])
             if missing_data_fraction > 0.5:
@@ -724,7 +735,12 @@ class Pipeline:
         with open(parameters_path, "r") as f:
             scaling_factor = json.load(f)["tree_scaling_factor"]
         tree = ChromevolExecutor.parse_ml_tree(tree_path=tree_path, scaling_factor=scaling_factor)
-        res = ChromevolExecutor.parse_evolutionary_path(input_path=simulated_evolution_path, output_path=processed_simulation_evolutionary_path, tree=tree, tree_scaling_factor=scaling_factor)
+        res = ChromevolExecutor.parse_evolutionary_path(
+            input_path=simulated_evolution_path,
+            output_path=processed_simulation_evolutionary_path,
+            tree=tree,
+            tree_scaling_factor=scaling_factor,
+        )
         evolutionary_data = pd.read_csv(processed_simulation_evolutionary_path)
         evolutionary_data["is_ploidy_transition"] = evolutionary_data.apply(
             lambda record: record.event_type in ["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"], axis=1
@@ -948,40 +964,47 @@ class Pipeline:
         if not os.path.exists(raw_evolutionary_paths_dir):
             if os.path.exists(raw_evolutionary_paths_zip_path):
                 logger.info(
-                    f"unpacking {raw_evolutionary_paths_zip_path} to {os.path.dirname(raw_evolutionary_paths_zip_path)}")
+                    f"unpacking {raw_evolutionary_paths_zip_path} to {os.path.dirname(raw_evolutionary_paths_zip_path)}"
+                )
                 shutil.unpack_archive(raw_evolutionary_paths_zip_path, os.path.dirname(raw_evolutionary_paths_zip_path))
             else:
                 os.makedirs(raw_evolutionary_paths_dir, exist_ok=True)
         if not os.path.exists(processed_evolutionary_paths_dir):
-            if os.path.exists(
-                processed_evolutionary_paths_zip_path):
+            if os.path.exists(processed_evolutionary_paths_zip_path):
                 logger.info(
-                    f"unpacking {processed_evolutionary_paths_zip_path} to {os.path.dirname(processed_evolutionary_paths_zip_path)}")
-                shutil.unpack_archive(processed_evolutionary_paths_zip_path,
-                                      os.path.dirname(processed_evolutionary_paths_zip_path))
+                    f"unpacking {processed_evolutionary_paths_zip_path} to {os.path.dirname(processed_evolutionary_paths_zip_path)}"
+                )
+                shutil.unpack_archive(
+                    processed_evolutionary_paths_zip_path, os.path.dirname(processed_evolutionary_paths_zip_path)
+                )
             else:
                 os.makedirs(processed_evolutionary_paths_dir, exist_ok=True)
         for path in evol_paths_in_main:
             os.rename(f"{sm_work_dir}{path}", f"{raw_evolutionary_paths_dir}{path}")
         for path in os.listdir(raw_evolutionary_paths_dir):
             mapping_index = path.replace("evoPathMapping_", "").replace(".txt", "")
-            respective_processed_path = f"{processed_evolutionary_paths_dir}events_by_age_simulations_{mapping_index}.csv"
+            respective_processed_path = (
+                f"{processed_evolutionary_paths_dir}events_by_age_simulations_{mapping_index}.csv"
+            )
             alternative_named_respective_processed_path = respective_processed_path.replace(".csv", ".txt.csv")
             if os.path.exists(alternative_named_respective_processed_path):
                 os.remove(alternative_named_respective_processed_path)
             res = ChromevolExecutor.parse_evolutionary_path(
-                    input_path=f"{raw_evolutionary_paths_dir}{path}",
-                    output_path=respective_processed_path,
-                    tree=ml_tree,
-                    tree_scaling_factor=scaling_factor)
+                input_path=f"{raw_evolutionary_paths_dir}{path}",
+                output_path=respective_processed_path,
+                tree=ml_tree,
+                tree_scaling_factor=scaling_factor,
+            )
 
         logger.info(f"packing raw evolutionary paths")
         res = os.system(
-            f"cd {sm_work_dir};zip -r raw_evolutionary_paths.zip ./raw_evolutionary_paths/;rm -rf ./raw_evolutionary_paths/")
+            f"cd {sm_work_dir};zip -r raw_evolutionary_paths.zip ./raw_evolutionary_paths/;rm -rf ./raw_evolutionary_paths/"
+        )
 
         logger.info(f"packing processed evolutionary paths")
         res = os.system(
-            f"cd {sm_work_dir};zip -r evolutionary_paths.zip ./evolutionary_paths/;rm -rf ./evolutionary_paths/")
+            f"cd {sm_work_dir};zip -r evolutionary_paths.zip ./evolutionary_paths/;rm -rf ./evolutionary_paths/"
+        )
         return 0
 
     def _get_frequency_of_duplication_events(
@@ -1032,7 +1055,9 @@ class Pipeline:
 
         if os.path.exists(sm_output_dir):
             logger.info(f"packing stochastic mappings")
-            res = os.system(f"cd {sm_work_dir};zip -r stochastic_mappings.zip ./stochastic_mappings/;rm -rf ./stochastic_mappings/")
+            res = os.system(
+                f"cd {sm_work_dir};zip -r stochastic_mappings.zip ./stochastic_mappings/;rm -rf ./stochastic_mappings/"
+            )
 
         # correct other stochastic mappings outputs, if needed
         res = Pipeline._process_stochastic_mappings_outputs(sm_work_dir=sm_work_dir)
@@ -1049,9 +1074,7 @@ class Pipeline:
         sm_work_dir = f"{self.work_dir}stochastic_mapping/"
         full_tree = None
         if os.path.exists(sm_work_dir):
-            tree_with_internal_names_path = (
-                f"{sm_work_dir}MLAncestralReconstruction.tree"
-            )
+            tree_with_internal_names_path = f"{sm_work_dir}MLAncestralReconstruction.tree"
             if not os.path.exists(tree_with_internal_names_path):
                 first_model_name = os.listdir(sm_work_dir)[0]
                 tree_with_internal_names_path = f"{sm_work_dir}{first_model_name}/MLAncestralReconstruction.tree"
@@ -1220,7 +1243,7 @@ class Pipeline:
             tree_path=tree_path,
             weighted_models_parameters_paths=weighted_models_parameters_paths,
             debug=debug,
-            use_model_selection=use_model_selection
+            use_model_selection=use_model_selection,
         )
 
         polyploidy_reliability_scores, diploidy_reliability_scores = None, None
@@ -1363,9 +1386,7 @@ class Pipeline:
         if os.path.exists(f"{self.work_dir}/simulations/"):
             if os.path.exists(f"{self.work_dir}/simulations.zip"):
                 os.remove(f"{self.work_dir}/simulations.zip")
-            res = os.system(
-                f"cd {self.work_dir};zip -r simulations.zip simulations/;rm -rf ./simulations/"
-            )
+            res = os.system(f"cd {self.work_dir};zip -r simulations.zip simulations/;rm -rf ./simulations/")
         return ploidy_classification
 
     @staticmethod
@@ -1433,7 +1454,7 @@ class Pipeline:
             for line in phylo_tree_lines:
                 if "<name>" in line:
                     taxon_name_with_chromosome_count = re.split(">|<|\n", line)[2]
-                    taxon_name = taxon_name_with_chromosome_count.split("-")[0]
+                    taxon_name = taxon_name_with_chromosome_count.split("-")[0].replace("_", " ")
                     phylo_out.write(line.replace(taxon_name_with_chromosome_count, taxon_name))
                     chrom_tag = "<chrom> - </chrom>\n"
                     if taxon_name in taxon_to_chromosome_count:
@@ -1457,12 +1478,17 @@ class Pipeline:
     @staticmethod
     def _write_init_phyloxml_tree(newick_path: str, phyloxml_path: str):
         tree = Tree(newick_path, format=1)
+
+        # correct names
+        for leaf in tree.get_leaves():
+            leaf.name = leaf.name.replace(" ", "_")
+
         tree.write(outfile=newick_path)
         Phylo.convert(newick_path, "newick", phyloxml_path, "phyloxml")
 
         # correct names
         for leaf in tree.get_leaves():
-            leaf.name = leaf.name
+            leaf.name = leaf.name.replace("_", " ")
         tree.write(outfile=newick_path)
 
     @staticmethod

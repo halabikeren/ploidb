@@ -185,19 +185,22 @@ def exec_ploidb_pipeline(
         pd.read_csv(taxonomic_classification_path) if taxonomic_classification_path is not None else None
     )
 
-    test_ploidy_classification = pipeline.get_ploidy_classification(
-        counts_path=counts_path,
-        tree_path=tree_path,
-        weighted_models_parameters_paths=model_path_to_weight,
-        mappings_num=1000,
-        taxonomic_classification_data=taxonomic_classification,
-        diploidy_threshold=diploidy_threshold,
-        polyploidy_threshold=polyploidy_threshold,
-        optimize_thresholds=optimize_thresholds,
-        debug=debug_sim_num,
-        use_model_selection=use_model_selection,
-    )
-    test_ploidy_classification.to_csv(ploidy_classification_path, index=False)
+    if os.path.exists(ploidy_classification_path):
+        test_ploidy_classification = pd.read_csv(ploidy_classification_path)
+    else:
+        test_ploidy_classification = pipeline.get_ploidy_classification(
+            counts_path=counts_path,
+            tree_path=tree_path,
+            weighted_models_parameters_paths=model_path_to_weight,
+            mappings_num=1000,
+            taxonomic_classification_data=taxonomic_classification,
+            diploidy_threshold=diploidy_threshold,
+            polyploidy_threshold=polyploidy_threshold,
+            optimize_thresholds=optimize_thresholds,
+            debug=debug_sim_num,
+            use_model_selection=use_model_selection,
+        )
+        test_ploidy_classification.to_csv(ploidy_classification_path, index=False)
     pipeline.write_labeled_phyloxml_tree(
         tree_path=tree_path,
         ploidy_classification_data=test_ploidy_classification,
