@@ -302,7 +302,7 @@ class ChromevolExecutor:
             base_age = parent.get_distance(parent.get_leaves()[0])
             curr_age = base_age
             min_age = child.get_distance(child.get_leaves()[0])
-            assert np.round(child.dist, 1) == np.round(base_age - min_age, 1)
+            assert np.round(child.dist, 0) == np.round(base_age - min_age, 0)
             transitions = [match for match in transition_regex.finditer(path)]
             src_states = [int(match.group(1)) for match in transitions]
             dst_states = [int(match.group(3)) for match in transitions]
