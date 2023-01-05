@@ -62,6 +62,7 @@ class Pipeline:
         command_dir: str,
         input_to_output: dict[str, str],
         input_to_run_in_main: Optional[str] = None,
+        rerun_the_undone: bool = True,
     ) -> int:
         os.makedirs(command_dir, exist_ok=True)
         input_to_jobs_commands = dict()
@@ -89,7 +90,7 @@ class Pipeline:
         logger.info(
             f"# chromevol jobs to run = {len(input_to_jobs_commands.keys()) + 1 if main_cmd is not None else 0}"
         )
-        if len(input_to_jobs_commands.keys()) > 0:
+        if rerun_the_undone and len(input_to_jobs_commands.keys()) > 0:
             if self.parallel:
                 jobs_paths = PBSService.generate_jobs(
                     jobs_commands=[
@@ -124,7 +125,7 @@ class Pipeline:
                         res = os.system(f"touch {os.path.dirname(input_path)}/failed_retry.touch")
             # in any case, run the main command from the parent process
 
-        if main_cmd is not None:
+        if rerun_the_undone and main_cmd is not None:
             res = os.system(main_cmd)
 
         logger.info(f"completed execution of chromevol across {len(input_to_jobs_commands.keys())} inputs")
@@ -210,7 +211,12 @@ class Pipeline:
         return model_to_weight
 
     def get_model_weights(
-        self, counts_path: str, tree_path: str, allow_base_num_parameter: bool = True, use_model_selection: bool = True
+        self,
+        counts_path: str,
+        tree_path: str,
+        allow_base_num_parameter: bool = True,
+        use_model_selection: bool = True,
+        rerun_the_undone: bool = True,
     ) -> dict:
         model_selection_work_dir = f"{self.work_dir}/model_selection/"
         os.makedirs(model_selection_work_dir, exist_ok=True)
@@ -233,14 +239,20 @@ class Pipeline:
             command_dir=model_selection_work_dir,
             input_to_output=input_to_output,
             input_to_run_in_main=most_complex_model_input_path,
+            rerun_the_undone=rerun_the_undone,
         )
         models_to_del = []
         for model_name in model_to_io:
             output_path = model_to_io[model_name]["output_path"]
             if not os.path.exists(output_path):
-                logger.error(
-                    f"execution of model {model_name} fit failed after retry and thus the model will be excluded from model selection"
-                )
+                if rerun_the_undone:
+                    logger.info(
+                        f"execution of model {model_name} fit failed after retry and thus the model and will thus be excluded from downstream analysis"
+                    )
+                else:
+                    logger.info(
+                        f"model {model_name} was not fitted to data in feasible time and will thus be excluded from downstream analysis"
+                    )
                 models_to_del.append(model_name)
         for model_name in models_to_del:
             del model_to_io[model_name]
@@ -575,6 +587,7 @@ class Pipeline:
         max_observed_chr_count: int,
         trials_num: int,
         simulations_num: int,
+        simulations_max_chr_num: int = 800,
     ) -> str:
         os.makedirs(work_dir, exist_ok=True)
         sm_input_path = f"{work_dir}sim_params.json"
@@ -587,7 +600,7 @@ class Pipeline:
             "optimize_iter_num": 0,
             "frequencies_path": frequencies_path,
             "min_chromosome_num": 1,
-            "max_chromosome_num": 200,
+            "max_chromosome_num": simulations_max_chr_num,
             "max_transitions_num": int(max_observed_chr_count - min_observed_chr_count),
             "max_chr_inferred": int(max_observed_chr_count + 10),
             "simulate": True,
@@ -1171,7 +1184,7 @@ class Pipeline:
                 if not os.path.exists(simulations_dir) and os.path.exists(simulations_zip_path):
                     logger.info(f"unpacking {simulations_zip_path} into {self.work_dir}")
                     shutil.unpack_archive(simulations_zip_path, self.work_dir)
-                sim_num = 100 if debug else 10
+                sim_num = 100
                 model_path_to_simulations_dirs[model_path] = self.get_simulations(
                     orig_counts_path=counts_path,
                     tree_path=tree_path,
