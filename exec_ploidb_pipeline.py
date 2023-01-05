@@ -120,6 +120,13 @@ logger = logging.getLogger(__name__)
     help="indicator if we allow the selected model to include base number parameter or not",
     type=bool,
     required=False,
+    default=False,
+)
+@click.option(
+    "--rerun_the_undone",
+    help="indicator if we allow the selected model to include base number parameter or not",
+    type=bool,
+    required=False,
     default=True,
 )
 def exec_ploidb_pipeline(
@@ -139,6 +146,7 @@ def exec_ploidb_pipeline(
     ploidy_classification_path: str,
     allow_base_num_parameter: bool,
     use_model_selection: bool,
+    rerun_the_undone: bool,
 ):
 
     if ploidy_classification_path is None:
@@ -173,6 +181,7 @@ def exec_ploidb_pipeline(
         tree_path=tree_path,
         allow_base_num_parameter=allow_base_num_parameter,
         use_model_selection=use_model_selection,
+        rerun_the_undone=rerun_the_undone,
     )
 
     if optimize_thresholds:
