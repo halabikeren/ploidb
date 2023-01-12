@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from time import sleep
 from typing import Dict
+import pandas as pd
+from Bio import SeqIO
 
 from dotenv import load_dotenv, find_dotenv
 from ete3 import Tree
@@ -54,16 +56,17 @@ class OneTwoTreeInput:
 @dataclass
 class OneTwoTreeOutput:
     tree_path: str
-    covered_taxa_path: str
 
 
 class OneTwoTreeExecutor:
     @staticmethod
-    def _get_input(input_args: Dict[str, str]) -> OneTwoTreeInput:
+    def _get_input(input_args: Dict[str, str], use_mad_rooting: bool = False) -> OneTwoTreeInput:
         one_two_tree_input = OneTwoTreeInput(**input_args)
         with open(f"{os.path.dirname(__file__)}/one_two_tree_param.template", "r") as infile:
             input_template = infile.read()
         input_string = input_template.format(**dataclasses.asdict(one_two_tree_input))
+        if use_mad_rooting:
+            input_string.replace("Outgroup_Flag:Single", "Outgroup_Flag:Mad")
         with open(one_two_tree_input.parameters_path, "w") as outfile:
             outfile.write(input_string)
         return one_two_tree_input
@@ -85,33 +88,39 @@ class OneTwoTreeExecutor:
         output_path = f"OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
         res = os.system(f"cd {one_two_tree_input.output_dir}; unzip -o {output_path}")
         tree_path = f"{one_two_tree_input.output_dir}Result_Tree_{one_two_tree_input.job_name}.tre"
-        covered_taxa_path = f"{one_two_tree_input.output_dir}FinalSpeciesList.txt"
+        # covered_taxa_path = f"{one_two_tree_input.output_dir}FinalSpeciesList.txt"
         summary_path = f"{one_two_tree_input.output_dir}summary_file.txt"
         selected_out_group_regex = re.compile("Selected Outgroup\:\s*(.*?)\n", re.DOTALL)
-        with open(summary_path, "r") as f:
-            out_group_name = selected_out_group_regex.search(f.read()).group(1)
-        with open(covered_taxa_path, "r") as f:
-            covered_taxa = [s.replace("\n", "") for s in f.readlines()]
+        try:
+            with open(summary_path, "r") as f:
+                out_group_name = selected_out_group_regex.search(f.read()).group(1)
+        except Exception as e:
+            print(f"no outgroup in data")
+            out_group_name = None
+        # with open(covered_taxa_path, "r") as f:
+        #     lines = f.readlines()
+        #     covered_taxa = [n.replace("\n", "") for n in lines[0 : len(lines) : 2]]
         tree = Tree(tree_path, format=5)
         non_out_group_leaves = list(set(tree.get_leaf_names()) - {out_group_name})
         tree.prune(non_out_group_leaves, preserve_branch_length=True)
         for l in tree.get_leaves():
             l.name = l.name.replace("_", " ")
-        assert set(tree.get_leaf_names()) == set(covered_taxa)
+        # assert len(set(covered_taxa) - set(tree.get_leaf_names())) == 0
         output_tree_path = f"{one_two_tree_input.output_dir}/processed_tree.nwk"
         tree.write(outfile=output_tree_path)
-        OneTwoTreeOutput(tree_path=output_tree_path, covered_taxa_path=covered_taxa_path)
+        OneTwoTreeOutput(tree_path=output_tree_path)  # , covered_taxa_path=covered_taxa_path)
 
     @staticmethod
-    def run(input_args: Dict[str, str]) -> OneTwoTreeOutput:
-        one_two_tree_input = OneTwoTreeExecutor._get_input(input_args=input_args)
+    def run(input_args: Dict[str, str], use_mad_rooting: bool = False) -> OneTwoTreeOutput:
+        one_two_tree_input = OneTwoTreeExecutor._get_input(input_args=input_args, use_mad_rooting=use_mad_rooting)
         raw_output_path = f"{one_two_tree_input.output_dir}OneTwoTree_Output_{one_two_tree_input.job_name}.zip"
+        processed_tree_path = f"{one_two_tree_input.output_dir}processed_tree.nwk"
         if not os.path.exists(raw_output_path):
             res = OneTwoTreeExecutor._exec(exe_input=one_two_tree_input)
             if res != 0:
                 raise ValueError(
                     f"one two tree failed on {one_two_tree_input.taxa_list_path} with parameters path {one_two_tree_input.parameters_path}"
                 )
-        if os.path.exists(raw_output_path):
+        if not os.path.exists(processed_tree_path):
             one_two_tree_output = OneTwoTreeExecutor._parse_output(one_two_tree_input)
             return one_two_tree_output

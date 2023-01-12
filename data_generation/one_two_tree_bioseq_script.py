@@ -1,23 +1,25 @@
 import sys
 
 ONE_TWO_TREE_PATH = "/bioseq/oneTwoTree/"
+# ONE_TWO_TREE_PATH = '/groups/itay_mayrose/michaldrori/PROJECTS/OTT/OTT_V_1p2/'
 DAILY_TESTS_PATH = "/bioseq/bioSequence_scripts_and_constants/daily_tests"
 
 import os
+import csv
+import argparse
 import shutil
 
 
 # Create one job file for list of genera:
-def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, file_name, output_path, queue):
-
+def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, file_name, output_path, queue="itaym"):
     with open(file_name, "w") as handle:
         handle.write("#!/bin/bash\n\n")  # #!/bin/bash
         handle.write("#PBS -N " + job_name + "\n")
         # handle.write("#PBS -j oe\n")
         handle.write("#PBS -r y\n")
         # handle.write("#PBS -q itaym\n")
-        handle.write(f"#PBS -q {queue}\n")
-        handle.write("#PBS -l select=1:ncpus=2:mem=4gb\n")
+        handle.write("#PBS -q " + queue + "\n")
+        handle.write("#PBS -l select=1:ncpus=2:mem=1gb\n")
         handle.write("#PBS -v PBS_O_SHELL=bash,PBS_ENVIRONMENT=PBS_BATCH\n")
         handle.write("#PBS -e " + output_path + "\n")
         handle.write("#PBS -o " + output_path + "\n")
@@ -58,14 +60,13 @@ def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, fil
 
 
 # Create one job file for list of Taxon:
-def create_Spesific_job_file(job_name, command, file_name, error_files_path):
-
+def create_Spesific_job_file(job_name, command, file_name, error_files_path, queue="itaym"):
     with open(file_name, "w") as handle:
         handle.write("#!/bin/bash\n\n")  # #!/bin/bash
         handle.write("#PBS -N " + job_name + "\n")
         # handle.write("#PBS -j oe\n")
         handle.write("#PBS -r y\n")
-        handle.write("#PBS -q lifesciweb\n")
+        handle.write("#PBS -q " + queue + " \n")
         handle.write("#PBS -l select=1:ncpus=2:mem=1gb\n")
         handle.write("#PBS -v PBS_O_SHELL=bash,PBS_ENVIRONMENT=PBS_BATCH\n")
         handle.write("#PBS -e " + error_files_path + " \n")
@@ -111,7 +112,6 @@ def create_Spesific_job_file(job_name, command, file_name, error_files_path):
 
 
 def remove_directory(folder):
-
     # folder = '/path/to/folder'
     for the_file in os.listdir(folder):
         file_path = os.path.join(folder, the_file)
@@ -146,7 +146,6 @@ OUTPUT_OTT_PATH = sys.argv[2]
 JobName = sys.argv[3]
 queue = sys.argv[4]
 
-
 # This case is for special runs - genera list includes all species and genera for 1 alignment:
 # Dir name will be as the input file and the list will be copied into the taxa_list.txt input for the alignment
 # species_list_file = os.path.basename(file_name)
@@ -159,7 +158,8 @@ if not os.path.exists(Dir_name):
     os.makedirs(Dir_name)
 f_taxa_list_file = open(OUTPUT_OTT_PATH + "/taxa_list.txt", "w")
 shutil.copyfile(species_list_file, OUTPUT_OTT_PATH + "/taxa_list.txt")
-align_script = ONE_TWO_TREE_PATH + "buildTaxaTree.py"
+
+align_script = ONE_TWO_TREE_PATH + "buildTaxaTree.py"  # 'buildTaxaTree_mad.py'
 align_ini = ONE_TWO_TREE_PATH + "OneTwoTree.ini"
 
 cmd = (
