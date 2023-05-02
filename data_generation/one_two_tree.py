@@ -30,8 +30,9 @@ class OneTwoTreeInput:
     output_dir: str
     parameters_path: str
     queue: str
+    memory: int
 
-    def __init__(self, taxa_path: str, job_name: str, output_dir: str, queue: str = "itaym"):
+    def __init__(self, taxa_path: str, job_name: str, output_dir: str, queue: str = "itaym", memory: int = 1):
         os.makedirs(output_dir, exist_ok=True)
         taxa_list_path = f"{output_dir}{taxa_list_filename}"
         res = os.system(f"cp {taxa_path} {taxa_list_path}")
@@ -47,6 +48,7 @@ class OneTwoTreeInput:
         self.job_name = job_name
         self.output_dir = output_dir
         self.queue = queue
+        self.memory = memory
 
         for filename in empty_file_names:
             with open(f"{output_dir}{filename}", mode="a"):
@@ -75,7 +77,7 @@ class OneTwoTreeExecutor:
     def _exec(
         exe_input: OneTwoTreeInput,
     ) -> int:
-        cmd = f"module load python/anaconda3-5.0.0;python {os.path.dirname(os.path.realpath(__file__))}/one_two_tree_bioseq_script.py {exe_input.taxa_list_path} {exe_input.output_dir} {exe_input.job_name} {exe_input.queue};"
+        cmd = f"module load python/anaconda3-5.0.0;python {os.path.dirname(os.path.realpath(__file__))}/one_two_tree_bioseq_script.py {exe_input.taxa_list_path} {exe_input.output_dir} {exe_input.job_name} {exe_input.queue} {exe_input.memory};"
         cmd.replace("//", "/")
         res = subprocess.getoutput(cmd)
         job_id = re.search("(\d+)\.power\d", str(res)).group(1)

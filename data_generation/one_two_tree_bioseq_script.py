@@ -1,6 +1,7 @@
 import sys
 
 ONE_TWO_TREE_PATH = "/bioseq/oneTwoTree/"
+ONE_TWO_TREE_INI_PATH = "/groups/itay_mayrose/halabikeren/OneTwoTree.ini"
 # ONE_TWO_TREE_PATH = '/groups/itay_mayrose/michaldrori/PROJECTS/OTT/OTT_V_1p2/'
 DAILY_TESTS_PATH = "/bioseq/bioSequence_scripts_and_constants/daily_tests"
 
@@ -11,7 +12,9 @@ import shutil
 
 
 # Create one job file for list of genera:
-def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, file_name, output_path, queue="itaym"):
+def create_job_file(
+    job_name, command_align, email_start_cmd, email_end_cmd, file_name, output_path, queue="itaym", mem=1
+):
     with open(file_name, "w") as handle:
         handle.write("#!/bin/bash\n\n")  # #!/bin/bash
         handle.write("#PBS -N " + job_name + "\n")
@@ -19,7 +22,7 @@ def create_job_file(job_name, command_align, email_start_cmd, email_end_cmd, fil
         handle.write("#PBS -r y\n")
         # handle.write("#PBS -q itaym\n")
         handle.write("#PBS -q " + queue + "\n")
-        handle.write("#PBS -l select=1:ncpus=2:mem=1gb\n")
+        handle.write(f"#PBS -l select=1:ncpus=2:mem={mem}gb\n")
         handle.write("#PBS -v PBS_O_SHELL=bash,PBS_ENVIRONMENT=PBS_BATCH\n")
         handle.write("#PBS -e " + output_path + "\n")
         handle.write("#PBS -o " + output_path + "\n")
@@ -145,6 +148,7 @@ cmd = "none"
 OUTPUT_OTT_PATH = sys.argv[2]
 JobName = sys.argv[3]
 queue = sys.argv[4]
+mem = sys.argv[5]
 
 # This case is for special runs - genera list includes all species and genera for 1 alignment:
 # Dir name will be as the input file and the list will be copied into the taxa_list.txt input for the alignment
@@ -160,7 +164,7 @@ f_taxa_list_file = open(OUTPUT_OTT_PATH + "/taxa_list.txt", "w")
 shutil.copyfile(species_list_file, OUTPUT_OTT_PATH + "/taxa_list.txt")
 
 align_script = ONE_TWO_TREE_PATH + "buildTaxaTree.py"  # 'buildTaxaTree_mad.py'
-align_ini = ONE_TWO_TREE_PATH + "OneTwoTree.ini"
+align_ini = ONE_TWO_TREE_INI_PATH
 
 cmd = (
     "python "
@@ -226,7 +230,7 @@ else:
     email_end_cmd = ""
 
 job_filename = create_job_file(
-    "-".join(["OTT", JobName]), cmd, email_start_cmd, email_end_cmd, FileNameAndPath, errorFilePath, queue
+    "-".join(["OTT", JobName]), cmd, email_start_cmd, email_end_cmd, FileNameAndPath, errorFilePath, queue, mem
 )
 os.chdir(OUTPUT_OTT_PATH + "/")
 # log_file_name = OUTPUT_OTT_PATH + 'OTT_log.txt'
