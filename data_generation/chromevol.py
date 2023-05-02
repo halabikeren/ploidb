@@ -279,6 +279,12 @@ class ChromevolExecutor:
         for node in tree.traverse():
             node.name = "-".join(node.name.split("-")[:-1])
             node.dist = node.dist / scaling_factor
+
+        # relevant for ott trees which are not strictly ultrametric
+        if len(set([np.round(tree.get_distance(leaf), 2) for leaf in tree.get_leaves()])) > 1:
+            logger.info(f"the given tree at {tree_path} is not ultrametric! will force it to be so now...")
+            tree.convert_to_ultrametric()
+
         return tree
 
     @staticmethod
@@ -338,12 +344,48 @@ class ChromevolExecutor:
 
         if len(event_ages_dfs) > 0:
             event_ages = pd.concat(event_ages_dfs)
-            event_ages.to_csv(output_path, index=False)
+        else:
+            event_ages = pd.DataFrame(
+                columns=[
+                    "age",
+                    "branch_parent_name",
+                    "branch_child_name",
+                    "event_type",
+                    "src_state",
+                    "dst_state",
+                    "is_child_external",
+                    "is_legal",
+                ]
+            )
+        event_ages.to_csv(output_path, index=False)
         return 0
 
     @staticmethod
     def _parse_simulations(input_dir: str, evolutionary_paths_dir: str):
         pass
+
+    @staticmethod
+    def compute_expected_ploidy_ages(evolutionary_paths_dir: str, expected_ploidy_ages_data_path: str):
+        if not os.path.exists(expected_ploidy_ages_data_path):
+            ploidy_ages_data = []
+            for path in os.listdir(evolutionary_paths_dir):
+                data = pd.read_csv(f"{evolutionary_paths_dir}{path}")
+                data["mapping_index"] = path.split("_")[-1].split(".")[0]
+                ploidy_ages_data.append(data)
+            ploidy_ages_data = pd.concat(ploidy_ages_data)
+            ploidy_ages_data["is_polyploidization"] = ploidy_ages_data.event_type.isin(
+                ["BASE-NUMBER", "DEMI-DUPLICATION", "DUPLICATION"]
+            )
+            expected_ploidy_ages_data = (
+                ploidy_ages_data.groupby(["branch_parent_name", "branch_child_name", "is_polyploidization"])
+                .agg({"mapping_index": lambda x: len(x) / 1000, "age": lambda x: np.mean(x)})
+                .reset_index()
+            )
+            expected_ploidy_ages_data = expected_ploidy_ages_data.rename(
+                columns={"mapping_index": "frequency_across_mappings"}
+            )
+
+            expected_ploidy_ages_data.to_csv(expected_ploidy_ages_data_path)
 
     @staticmethod
     def _parse_stochastic_mappings(input_dir: str, mappings_dir: str, evolutionary_paths_dir: str):
@@ -369,10 +411,16 @@ class ChromevolExecutor:
                 index = path.replace("evoPathMapping_", "").replace(".txt", "")
                 input_path = f"{input_dir}{path}"
                 output_path = f"{evolutionary_paths_dir}events_by_age_simulations_{index}.csv"
-                res = ChromevolExecutor.parse_evolutionary_path(
-                    input_path=input_path, output_path=output_path, tree=tree, tree_scaling_factor=scaling_factor
-                )
+                if not os.path.exists(output_path):
+                    res = ChromevolExecutor.parse_evolutionary_path(
+                        input_path=input_path, output_path=output_path, tree=tree, tree_scaling_factor=scaling_factor
+                    )
                 res = os.system(f"mv {input_path} {raw_evolutionary_paths_dir}")
+
+        expected_ploidy_ages_data_path = f"{input_dir}expected_ploidy_ages_data.csv"
+        ChromevolExecutor.compute_expected_ploidy_ages(
+            evolutionary_paths_dir=evolutionary_paths_dir, expected_ploidy_ages_data_path=expected_ploidy_ages_data_path
+        )
         res = os.system(
             f"cd {input_dir};zip -r raw_evolutionary_paths.zip ./raw_evolutionary_paths; rm -rf ./raw_evolutionary_paths/"
         )
