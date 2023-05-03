@@ -129,6 +129,21 @@ logger = logging.getLogger(__name__)
     required=False,
     default=True,
 )
+@click.option(
+    "--add_age_by_best_model",
+    help="indicator if expected age computation should be weighted by models or rely only on the best model. Model "
+         "weighting is used by default",
+    type=bool,
+    required=False,
+    default=True,
+)
+@click.option(
+    "--rerun_classification",
+    help="indicator to whether to compute ploidy.csv output again if exists",
+    type=bool,
+    required=False,
+    default=True,
+)
 def exec_ploidb_pipeline(
     counts_path: str,
     tree_path: str,
@@ -147,6 +162,8 @@ def exec_ploidb_pipeline(
     allow_base_num_parameter: bool,
     use_model_selection: bool,
     rerun_the_undone: bool,
+    add_age_by_best_model: bool,
+    rerun_classification: bool
 ):
 
     if ploidy_classification_path is None:
@@ -194,7 +211,7 @@ def exec_ploidb_pipeline(
         pd.read_csv(taxonomic_classification_path) if taxonomic_classification_path is not None else None
     )
 
-    if os.path.exists(ploidy_classification_path):
+    if os.path.exists(ploidy_classification_path) and not rerun_classification:
         test_ploidy_classification = pd.read_csv(ploidy_classification_path)
     else:
         test_ploidy_classification = pipeline.get_ploidy_classification(
@@ -208,6 +225,7 @@ def exec_ploidb_pipeline(
             optimize_thresholds=optimize_thresholds,
             debug=debug_sim_num,
             use_model_selection=use_model_selection,
+            add_age_by_best_model=add_age_by_best_model
         )
         test_ploidy_classification.to_csv(ploidy_classification_path, index=False)
     pipeline.write_labeled_phyloxml_tree(

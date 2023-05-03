@@ -6,6 +6,7 @@ from typing import Dict, Tuple, List, Optional
 
 import numpy as np
 import pandas as pd
+pd.set_option('mode.chained_assignment', None)
 import sys
 
 import pickle
@@ -289,6 +290,42 @@ class Pipeline:
             json.dump(obj=input_args, fp=outfile)
         return sm_input_path, sm_output_dir
 
+    @staticmethod
+    def _get_ploidy_age(sm_work_dir: str):
+        tree_path = f"{sm_work_dir}/MLAncestralReconstruction.tree"
+        parameters_path = f"{sm_work_dir}/sm_params.json"
+        with open(parameters_path, "r") as f:
+            scaling_factor = json.load(f)["tree_scaling_factor"]
+        ml_tree = ChromevolExecutor.parse_ml_tree(tree_path=tree_path, scaling_factor=scaling_factor)
+
+        expected_ploidy_ages_data_path = f"{sm_work_dir}expected_ploidy_ages_data.csv"
+        evolutionary_paths_zip_path = f"{sm_work_dir}evolutionary_paths.zip"
+        os.system(f"cd {os.path.dirname(evolutionary_paths_zip_path)};unzip {os.path.basename(evolutionary_paths_zip_path)}")
+        evolutionary_paths_dir = f"{sm_work_dir}evolutionary_paths/"
+        if not os.path.exists(expected_ploidy_ages_data_path):
+            ChromevolExecutor.compute_expected_ploidy_ages(evolutionary_paths_dir=evolutionary_paths_dir, expected_ploidy_ages_data_path=expected_ploidy_ages_data_path)
+        expected_ploidy_ages_data = pd.read_csv(expected_ploidy_ages_data_path)
+        node_to_age = {}
+        for node in ml_tree.get_leaves():
+            leaf_name = node.name
+            earliest_polyploidization_age_data = expected_ploidy_ages_data.query(
+                f"branch_child_name == '{node.name}' and is_polyploidization")
+            earliest_polyploidization_age = earliest_polyploidization_age_data.age.max() if \
+                earliest_polyploidization_age_data.shape[0] > 0 else 0
+            while not node.up.is_root():
+                node = node.up
+                polyploidization_age_data = expected_ploidy_ages_data.query(
+                    f"branch_child_name == '{node.name}' and is_polyploidization")
+                polyploidization_age = polyploidization_age_data.age.max() if polyploidization_age_data.shape[
+                                                                                  0] > 0 else 0
+                if polyploidization_age > earliest_polyploidization_age:
+                    earliest_polyploidization_age = polyploidization_age
+            node_to_age[leaf_name] = earliest_polyploidization_age
+        df = pd.DataFrame.from_dict(node_to_age, orient="index").reset_index().rename(
+            columns={"index": "NODE", 0: "ploidy_age"})
+        df.ploidy_age = df.ploidy_age.replace({0: np.nan})
+        return df
+
     def _get_stochastic_mappings(
         self,
         counts_path: str,
@@ -339,6 +376,9 @@ class Pipeline:
             sm_work_dir=sm_work_dir,
             mappings_num=mappings_num,
         )
+
+        taxon_to_ploidy_age = Pipeline._get_ploidy_age(sm_work_dir=sm_work_dir)
+        taxon_to_polyploidy_support = taxon_to_polyploidy_support.merge(taxon_to_ploidy_age, on="NODE", how="left")
         return taxon_to_polyploidy_support
 
     @staticmethod
@@ -491,7 +531,10 @@ class Pipeline:
     def _parse_mapping(path: str, tree_with_states: Tree) -> str:
         processed_mapping_path = path.replace("stMapping_mapping_", "processed_stMapping_mapping_")
         if not os.path.exists(processed_mapping_path):
-            mapping = pd.read_csv(path)
+            try:
+                mapping = pd.read_csv(path)
+            except Exception as e:
+                return np.nan
             mapping["ploidy_events_num"] = np.round(
                 mapping[["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"]].sum(axis=1, skipna=False)
             )
@@ -544,7 +587,12 @@ class Pipeline:
         mappings_paths["processed_mapping_path"] = mappings_paths.mapping_path.apply(
             lambda path: Pipeline._parse_mapping(path=path, tree_with_states=tree_with_states)
         )
-        mappings = [pd.read_csv(path) for path in mappings_paths["processed_mapping_path"].tolist()]
+        mappings = []
+        for path in mappings_paths["processed_mapping_path"].dropna().tolist():
+            try:
+                mappings.append(pd.read_csv(path))
+            except:
+                pass
         if len(mappings) > 0:
             processed_mappings_data = pd.concat(mappings).groupby("NODE").mean().reset_index()
             processed_mappings_data.to_csv(processed_mappings_path, index=False)
@@ -748,12 +796,13 @@ class Pipeline:
         with open(parameters_path, "r") as f:
             scaling_factor = json.load(f)["tree_scaling_factor"]
         tree = ChromevolExecutor.parse_ml_tree(tree_path=tree_path, scaling_factor=scaling_factor)
-        res = ChromevolExecutor.parse_evolutionary_path(
-            input_path=simulated_evolution_path,
-            output_path=processed_simulation_evolutionary_path,
-            tree=tree,
-            tree_scaling_factor=scaling_factor,
-        )
+        if not os.path.exists(processed_simulation_evolutionary_path):
+            res = ChromevolExecutor.parse_evolutionary_path(
+                input_path=simulated_evolution_path,
+                output_path=processed_simulation_evolutionary_path,
+                tree=tree,
+                tree_scaling_factor=scaling_factor,
+            )
         evolutionary_data = pd.read_csv(processed_simulation_evolutionary_path)
         evolutionary_data["is_ploidy_transition"] = evolutionary_data.apply(
             lambda record: record.event_type in ["DUPLICATION", "DEMI-DUPLICATION", "BASE-NUMBER"], axis=1
@@ -802,10 +851,12 @@ class Pipeline:
         simulations_dir: Optional[str] = None,
         output_dir_suffix: Optional[str] = None,
     ) -> list[str]:
+        print(f"first simulations_dir={simulations_dir}")
         if not simulations_dir:
             simulations_dir = f"{self.work_dir}/simulations/"
         if output_dir_suffix:
             simulations_dir += f"{output_dir_suffix}/"
+        print(f"second simulations_dir={simulations_dir}")
         counts = [
             int(str(record.seq)) if str(record.seq) != "X" else np.nan
             for record in list(SeqIO.parse(orig_counts_path, format="fasta"))
@@ -1002,12 +1053,13 @@ class Pipeline:
             alternative_named_respective_processed_path = respective_processed_path.replace(".csv", ".txt.csv")
             if os.path.exists(alternative_named_respective_processed_path):
                 os.remove(alternative_named_respective_processed_path)
-            res = ChromevolExecutor.parse_evolutionary_path(
-                input_path=f"{raw_evolutionary_paths_dir}{path}",
-                output_path=respective_processed_path,
-                tree=ml_tree,
-                tree_scaling_factor=scaling_factor,
-            )
+            if not os.path.exists(respective_processed_path):
+                res = ChromevolExecutor.parse_evolutionary_path(
+                    input_path=f"{raw_evolutionary_paths_dir}{path}",
+                    output_path=respective_processed_path,
+                    tree=ml_tree,
+                    tree_scaling_factor=scaling_factor,
+                )
 
         logger.info(f"packing raw evolutionary paths")
         res = os.system(
@@ -1058,7 +1110,8 @@ class Pipeline:
             .reset_index()
         )
         taxon_to_polyploidy_support.set_index("NODE", inplace=True)
-        # set the frequency of polyploidization based in inference on the ancestral node for nodes with no direct polyploidy_frequency
+        # set the frequency of polyploidization based in inference on the ancestral node for nodes with no direct
+        # polyploidy_frequency
         taxon_to_polyploidy_support["polyploidy_frequency"].fillna(
             value=taxon_to_polyploidy_support["inferred_polyploidy_frequency"].to_dict(),
             inplace=True,
@@ -1145,8 +1198,8 @@ class Pipeline:
         counts_path: str,
         weighted_models_parameters_paths: dict[str, float],
         mappings_num: int = 1000,
-        debug: bool = False,
         use_model_selection: bool = True,
+        optimize_thresholds: bool = False,
     ) -> Tuple[dict[str, pd.DataFrame], dict[str, list[str]]]:
         tree = Tree(tree_path, format=1)
         model_path_to_polyploidy_support, model_path_to_simulations_dirs = {}, {}
@@ -1178,41 +1231,60 @@ class Pipeline:
                     mappings_num=mappings_num,
                     output_dir_suffix=model_name if not use_model_selection else None,
                 )
-                logger.info(f"conducting simulations...")
-                simulations_dir = f"{self.work_dir}/simulations/"
-                simulations_zip_path = f"{self.work_dir}/simulations.zip"
-                if not os.path.exists(simulations_dir) and os.path.exists(simulations_zip_path):
-                    logger.info(f"unpacking {simulations_zip_path} into {self.work_dir}")
-                    shutil.unpack_archive(simulations_zip_path, self.work_dir)
-                sim_num = 100
-                model_path_to_simulations_dirs[model_path] = self.get_simulations(
-                    orig_counts_path=counts_path,
-                    tree_path=tree_path,
-                    model_parameters_path=model_path,
-                    simulations_num=sim_num,
-                    output_dir_suffix=model_name if not use_model_selection else None,
-                )
+                if optimize_thresholds:
+                    logger.info(f"conducting simulations...")
+                    simulations_dir = f"{self.work_dir}/simulations/"
+                    simulations_zip_path = f"{self.work_dir}/simulations.zip"
+                    if not os.path.exists(simulations_dir) and os.path.exists(simulations_zip_path):
+                        logger.info(f"unpacking {simulations_zip_path} into {self.work_dir}")
+                        shutil.unpack_archive(simulations_zip_path, self.work_dir)
+                    sim_num = 100
+                    model_path_to_simulations_dirs[model_path] = self.get_simulations(
+                        orig_counts_path=counts_path,
+                        tree_path=tree_path,
+                        model_parameters_path=model_path,
+                        simulations_num=sim_num,
+                        output_dir_suffix=model_name if not use_model_selection else None,
+                    )
 
         return model_path_to_polyploidy_support, model_path_to_simulations_dirs
 
     @staticmethod
     def _aggregate_ploidy_support_across_models(
-        weighted_models_parameters_paths: dict[str, float], model_path_to_polyploidy_support: dict[str, pd.DataFrame]
+        weighted_models_parameters_paths: dict[str, float],
+        model_path_to_polyploidy_support: dict[str, pd.DataFrame],
+        add_age_by_best_model: bool = True
     ) -> pd.DataFrame:
         polyploidy_support_datasets = []
+        models_by_weights = list(weighted_models_parameters_paths.keys())
+        models_by_weights.sort(key=lambda m: weighted_models_parameters_paths[m], reverse=True)
+        best_model = models_by_weights[0]
         for model_path in weighted_models_parameters_paths:
             weight = weighted_models_parameters_paths[model_path]
             polyploidy_support = model_path_to_polyploidy_support[model_path][
-                ["NODE", "polyploidy_frequency", "inferred_polyploidy_frequency", "frequency_of_successful_mappings"]
+                ["NODE",
+                 "polyploidy_frequency",
+                 "inferred_polyploidy_frequency",
+                 "frequency_of_successful_mappings",
+                 "ploidy_age"]
             ]
+            polyploidy_support["ploidy_age"] = polyploidy_support["ploidy_age"].fillna(0) # replace nans with 0 so
+            # the model is not considered
             polyploidy_support["polyploidy_frequency"].fillna(
                 value=polyploidy_support["inferred_polyploidy_frequency"].to_dict(), inplace=True
             )
             polyploidy_support.drop("inferred_polyploidy_frequency", axis=1, inplace=True)
             polyploidy_support.set_index("NODE", inplace=True)
-            polyploidy_support[["polyploidy_frequency", "frequency_of_successful_mappings"]] = (
-                polyploidy_support[["polyploidy_frequency", "frequency_of_successful_mappings"]] * weight
+            polyploidy_support[["polyploidy_frequency", "frequency_of_successful_mappings", "ploidy_age"]] = (
+                polyploidy_support[["polyploidy_frequency", "frequency_of_successful_mappings", "ploidy_age"]] * weight
             )
+            if add_age_by_best_model:
+                polyploidy_support["ploidy_age_by_best_model"] = polyploidy_support["ploidy_age"]
+                if model_path != best_model:
+                    polyploidy_support["ploidy_age_by_best_model"] = 0
+                else:
+                    polyploidy_support["ploidy_age_by_best_model"] = polyploidy_support["ploidy_age_by_best_model"] / weight # undo multiplication by weighted to get overall no multiplication
+
             # replace nans with 0 contribution
             polyploidy_support.loc[
                 polyploidy_support.polyploidy_frequency.isna(), "frequency_of_successful_mappings"
@@ -1224,6 +1296,9 @@ class Pipeline:
         for df in polyploidy_support_datasets[1:]:
             base_polyploidy_support += df
 
+        base_polyploidy_support["ploidy_age"] = base_polyploidy_support["ploidy_age"].replace({0: np.nan})
+        if "ploidy_age_by_best_model" in base_polyploidy_support.columns:
+            base_polyploidy_support["ploidy_age_by_best_model"] = base_polyploidy_support["ploidy_age_by_best_model"].replace({0: np.nan})
         base_polyploidy_support.reset_index(inplace=True)
         return base_polyploidy_support
 
@@ -1240,6 +1315,7 @@ class Pipeline:
         sim_num: int = 10,
         debug: bool = False,
         use_model_selection: bool = True,
+        add_age_by_best_model: bool = True
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(columns=["Taxon", "Genus", "Family", "Ploidy inference"])
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
@@ -1255,8 +1331,8 @@ class Pipeline:
             counts_path=counts_path,
             tree_path=tree_path,
             weighted_models_parameters_paths=weighted_models_parameters_paths,
-            debug=debug,
             use_model_selection=use_model_selection,
+            optimize_thresholds=optimize_thresholds,
         )
 
         polyploidy_reliability_scores, diploidy_reliability_scores = None, None
@@ -1295,6 +1371,7 @@ class Pipeline:
         aggregated_taxon_to_polyploidy_support = self._aggregate_ploidy_support_across_models(
             weighted_models_parameters_paths=weighted_models_parameters_paths,
             model_path_to_polyploidy_support=model_path_to_polyploidy_support,
+            add_age_by_best_model=add_age_by_best_model
         )
         logger.info(
             f"classifying taxa to ploidy status based on duplication events frequency across stochastic mappings"
@@ -1312,6 +1389,18 @@ class Pipeline:
             value=aggregated_taxon_to_polyploidy_support.set_index("NODE")["polyploidy_frequency"].to_dict(),
             inplace=True,
         )
+        ploidy_classification["Ploidy age"] = np.nan
+        ploidy_classification["Ploidy age"].fillna(
+            value=aggregated_taxon_to_polyploidy_support.set_index("NODE")["ploidy_age"].to_dict(),
+            inplace=True,
+        )
+
+        if "ploidy_age_by_best_model" in aggregated_taxon_to_polyploidy_support.columns:
+            ploidy_classification["Ploidy age by best model"] = np.nan
+            ploidy_classification["Ploidy age by best model"].fillna(
+                value=aggregated_taxon_to_polyploidy_support.set_index("NODE")["ploidy_age_by_best_model"].to_dict(),
+                inplace=True,
+            )
 
         def get_classification_reliability(record: pd.Series) -> float:
             ploidy_level = record["Ploidy inference"]
@@ -1467,7 +1556,11 @@ class Pipeline:
             for line in phylo_tree_lines:
                 if "<name>" in line:
                     taxon_name_with_chromosome_count = re.split(">|<|\n", line)[2]
-                    taxon_name = taxon_name_with_chromosome_count.split("-")[0].replace("_", " ")
+                    try:
+                        d = int(taxon_name_with_chromosome_count[-1])
+                        taxon_name = "-".join(taxon_name_with_chromosome_count.split("-")[:-1]).replace("_", " ")
+                    except Exception as e:
+                        taxon_name = taxon_name_with_chromosome_count.replace("_", " ")
                     phylo_out.write(line.replace(taxon_name_with_chromosome_count, taxon_name))
                     chrom_tag = "<chrom> - </chrom>\n"
                     if taxon_name in taxon_to_chromosome_count:
