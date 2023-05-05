@@ -6,7 +6,8 @@ from typing import Dict, Tuple, List, Optional
 
 import numpy as np
 import pandas as pd
-pd.set_option('mode.chained_assignment', None)
+
+pd.set_option("mode.chained_assignment", None)
 import sys
 
 import pickle
@@ -300,30 +301,42 @@ class Pipeline:
 
         expected_ploidy_ages_data_path = f"{sm_work_dir}expected_ploidy_ages_data.csv"
         evolutionary_paths_zip_path = f"{sm_work_dir}evolutionary_paths.zip"
-        os.system(f"cd {os.path.dirname(evolutionary_paths_zip_path)};unzip {os.path.basename(evolutionary_paths_zip_path)}")
+        os.system(
+            f"cd {os.path.dirname(evolutionary_paths_zip_path)};unzip {os.path.basename(evolutionary_paths_zip_path)}"
+        )
         evolutionary_paths_dir = f"{sm_work_dir}evolutionary_paths/"
         if not os.path.exists(expected_ploidy_ages_data_path):
-            ChromevolExecutor.compute_expected_ploidy_ages(evolutionary_paths_dir=evolutionary_paths_dir, expected_ploidy_ages_data_path=expected_ploidy_ages_data_path)
+            ChromevolExecutor.compute_expected_ploidy_ages(
+                evolutionary_paths_dir=evolutionary_paths_dir,
+                expected_ploidy_ages_data_path=expected_ploidy_ages_data_path,
+            )
         expected_ploidy_ages_data = pd.read_csv(expected_ploidy_ages_data_path)
         node_to_age = {}
         for node in ml_tree.get_leaves():
             leaf_name = node.name
-            earliest_polyploidization_age_data = expected_ploidy_ages_data.query(
-                f"branch_child_name == '{node.name}' and is_polyploidization")
-            earliest_polyploidization_age = earliest_polyploidization_age_data.age.max() if \
-                earliest_polyploidization_age_data.shape[0] > 0 else 0
-            while not node.up.is_root():
+            latest_polyploidization_age_data = expected_ploidy_ages_data.query(
+                f"branch_child_name == '{node.name}' and is_polyploidization"
+            )
+            latest_polyploidization_age = (
+                latest_polyploidization_age_data.age.min() if latest_polyploidization_age_data.shape[0] > 0 else np.nan
+            )
+            while not node.up.is_root() and pd.isna(latest_polyploidization_age):
                 node = node.up
                 polyploidization_age_data = expected_ploidy_ages_data.query(
-                    f"branch_child_name == '{node.name}' and is_polyploidization")
-                polyploidization_age = polyploidization_age_data.age.max() if polyploidization_age_data.shape[
-                                                                                  0] > 0 else 0
-                if polyploidization_age > earliest_polyploidization_age:
-                    earliest_polyploidization_age = polyploidization_age
-            node_to_age[leaf_name] = earliest_polyploidization_age
-        df = pd.DataFrame.from_dict(node_to_age, orient="index").reset_index().rename(
-            columns={"index": "NODE", 0: "ploidy_age"})
-        df.ploidy_age = df.ploidy_age.replace({0: np.nan})
+                    f"branch_child_name == '{node.name}' and is_polyploidization"
+                )
+                polyploidization_age = (
+                    polyploidization_age_data.age.min() if polyploidization_age_data.shape[0] > 0 else np.nan
+                )
+                if pd.notna(polyploidization_age):
+                    latest_polyploidization_age = polyploidization_age
+            node_to_age[leaf_name] = latest_polyploidization_age
+        df = (
+            pd.DataFrame.from_dict(node_to_age, orient="index")
+            .reset_index()
+            .rename(columns={"index": "NODE", 0: "ploidy_age"})
+        )
+        # df.ploidy_age = df.ploidy_age.replace({0: np.nan})
         return df
 
     def _get_stochastic_mappings(
@@ -1253,7 +1266,7 @@ class Pipeline:
     def _aggregate_ploidy_support_across_models(
         weighted_models_parameters_paths: dict[str, float],
         model_path_to_polyploidy_support: dict[str, pd.DataFrame],
-        add_age_by_best_model: bool = True
+        add_age_by_best_model: bool = True,
     ) -> pd.DataFrame:
         polyploidy_support_datasets = []
         models_by_weights = list(weighted_models_parameters_paths.keys())
@@ -1262,13 +1275,15 @@ class Pipeline:
         for model_path in weighted_models_parameters_paths:
             weight = weighted_models_parameters_paths[model_path]
             polyploidy_support = model_path_to_polyploidy_support[model_path][
-                ["NODE",
-                 "polyploidy_frequency",
-                 "inferred_polyploidy_frequency",
-                 "frequency_of_successful_mappings",
-                 "ploidy_age"]
+                [
+                    "NODE",
+                    "polyploidy_frequency",
+                    "inferred_polyploidy_frequency",
+                    "frequency_of_successful_mappings",
+                    "ploidy_age",
+                ]
             ]
-            polyploidy_support["ploidy_age"] = polyploidy_support["ploidy_age"].fillna(0) # replace nans with 0 so
+            polyploidy_support["ploidy_age"] = polyploidy_support["ploidy_age"].fillna(0)  # replace nans with 0 so
             # the model is not considered
             polyploidy_support["polyploidy_frequency"].fillna(
                 value=polyploidy_support["inferred_polyploidy_frequency"].to_dict(), inplace=True
@@ -1283,7 +1298,9 @@ class Pipeline:
                 if model_path != best_model:
                     polyploidy_support["ploidy_age_by_best_model"] = 0
                 else:
-                    polyploidy_support["ploidy_age_by_best_model"] = polyploidy_support["ploidy_age_by_best_model"] / weight # undo multiplication by weighted to get overall no multiplication
+                    polyploidy_support["ploidy_age_by_best_model"] = (
+                        polyploidy_support["ploidy_age_by_best_model"] / weight
+                    )  # undo multiplication by weighted to get overall no multiplication
 
             # replace nans with 0 contribution
             polyploidy_support.loc[
@@ -1298,7 +1315,9 @@ class Pipeline:
 
         base_polyploidy_support["ploidy_age"] = base_polyploidy_support["ploidy_age"].replace({0: np.nan})
         if "ploidy_age_by_best_model" in base_polyploidy_support.columns:
-            base_polyploidy_support["ploidy_age_by_best_model"] = base_polyploidy_support["ploidy_age_by_best_model"].replace({0: np.nan})
+            base_polyploidy_support["ploidy_age_by_best_model"] = base_polyploidy_support[
+                "ploidy_age_by_best_model"
+            ].replace({0: np.nan})
         base_polyploidy_support.reset_index(inplace=True)
         return base_polyploidy_support
 
@@ -1315,7 +1334,7 @@ class Pipeline:
         sim_num: int = 10,
         debug: bool = False,
         use_model_selection: bool = True,
-        add_age_by_best_model: bool = True
+        add_age_by_best_model: bool = True,
     ) -> pd.DataFrame:
         ploidy_classification = pd.DataFrame(columns=["Taxon", "Genus", "Family", "Ploidy inference"])
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
@@ -1371,7 +1390,7 @@ class Pipeline:
         aggregated_taxon_to_polyploidy_support = self._aggregate_ploidy_support_across_models(
             weighted_models_parameters_paths=weighted_models_parameters_paths,
             model_path_to_polyploidy_support=model_path_to_polyploidy_support,
-            add_age_by_best_model=add_age_by_best_model
+            add_age_by_best_model=add_age_by_best_model,
         )
         logger.info(
             f"classifying taxa to ploidy status based on duplication events frequency across stochastic mappings"
