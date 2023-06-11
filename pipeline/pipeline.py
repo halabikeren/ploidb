@@ -490,7 +490,7 @@ class Pipeline:
         logger.info(f"threshold with best coeff = {best_threshold} (coeff={best_coeff})")
         thresholds_with_best_coeff = [thr for thr in examined_thresholds if examined_thresholds[thr] == best_coeff]
         logger.info(
-            f"other thresholds with the same coefficient = {','.join([str(np.round(thr,3)) for thr in set(thresholds_with_best_coeff)])}"
+            f"other thresholds with the same coefficient = {','.join([str(np.round(thr, 3)) for thr in set(thresholds_with_best_coeff)])}"
         )
         best_threshold = np.min(thresholds_with_best_coeff) if for_polyploidy else np.max(thresholds_with_best_coeff)
         logger.info(
@@ -617,21 +617,21 @@ class Pipeline:
                 num_tomax_mappings += 1
             num_considered_mappings += 1
         logger.info(
-            f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings/mappings_num, 2)}% ({num_failed_mappings} / {mappings_num})"
+            f"% mappings with failed leaves trajectories = {np.round(num_failed_mappings / mappings_num, 2)}% ({num_failed_mappings} / {mappings_num})"
         )
         logger.info(
             f"% mappings with trajectories that reached max chromosome number = {np.round(num_tomax_mappings / mappings_num, 2)}% ({num_tomax_mappings} / {mappings_num})"
         )
         if num_considered_mappings < mappings_num * missing_mappings_threshold:
             logger.warning(
-                f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt"
+                f"less than {missing_mappings_threshold * 100}% of the mappings were successful, and so the script will halt"
             )
             raise ValueError(
-                f"less than {missing_mappings_threshold*100}% of the mappings were successful, and so the script will halt"
+                f"less than {missing_mappings_threshold * 100}% of the mappings were successful, and so the script will halt"
             )
         end_time = timer()
         logger.info(
-            f"completed processing {mappings_num} mappings within {stochastic_mappings_dir} in {timedelta(seconds=end_time-start_time)}"
+            f"completed processing {mappings_num} mappings within {stochastic_mappings_dir} in {timedelta(seconds=end_time - start_time)}"
         )
 
         res = os.system(f"cd {sm_dir}; zip -r stochastic_mappings.zip stochastic_mappings/")
@@ -1274,15 +1274,18 @@ class Pipeline:
         best_model = models_by_weights[0]
         for model_path in weighted_models_parameters_paths:
             weight = weighted_models_parameters_paths[model_path]
-            polyploidy_support = model_path_to_polyploidy_support[model_path][
-                [
-                    "NODE",
-                    "polyploidy_frequency",
-                    "inferred_polyploidy_frequency",
-                    "frequency_of_successful_mappings",
-                    "ploidy_age",
-                ]
-            ]
+            cols_of_interest = {
+                "NODE",
+                "polyploidy_frequency",
+                "inferred_polyploidy_frequency",
+                "frequency_of_successful_mappings",
+                "ploidy_age",
+            }
+            cols_to_extract = set(model_path_to_polyploidy_support[model_path].columns) & cols_of_interest
+            polyploidy_support = model_path_to_polyploidy_support[model_path][list(cols_to_extract)]
+            for c in cols_of_interest:
+                if c not in polyploidy_support.columns:
+                    polyploidy_support[c] = np.nan
             polyploidy_support["ploidy_age"] = polyploidy_support["ploidy_age"].fillna(0)  # replace nans with 0 so
             # the model is not considered
             polyploidy_support["polyploidy_frequency"].fillna(
