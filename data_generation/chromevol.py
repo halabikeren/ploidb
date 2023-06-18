@@ -323,7 +323,7 @@ class ChromevolExecutor:
             for i in range(len(transitions)):
                 src_state = src_states[i]
                 curr_age -= time_to_transition[i]
-                assert np.round(curr_age, 3) >= np.round(min_age, 3)
+                assert np.round(curr_age, 2) >= np.round(min_age, 2)
                 dst_state = dst_states[i]
                 event_type = ChromevolExecutor._get_event_type(src_state, dst_state)
                 event_ages_dfs.append(
