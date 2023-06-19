@@ -292,7 +292,7 @@ class Pipeline:
         return sm_input_path, sm_output_dir
 
     @staticmethod
-    def _get_ploidy_age(sm_work_dir: str):
+    def _get_ploidy_age(sm_work_dir: str, polyploidy_threshold: float):
         tree_path = f"{sm_work_dir}/MLAncestralReconstruction.tree"
         parameters_path = f"{sm_work_dir}/sm_params.json"
         with open(parameters_path, "r") as f:
@@ -305,38 +305,41 @@ class Pipeline:
             f"cd {os.path.dirname(evolutionary_paths_zip_path)};unzip {os.path.basename(evolutionary_paths_zip_path)}"
         )
         evolutionary_paths_dir = f"{sm_work_dir}evolutionary_paths/"
-        if not os.path.exists(expected_ploidy_ages_data_path):
-            ChromevolExecutor.compute_expected_ploidy_ages(
-                evolutionary_paths_dir=evolutionary_paths_dir,
-                expected_ploidy_ages_data_path=expected_ploidy_ages_data_path,
-            )
+        # if not os.path.exists(expected_ploidy_ages_data_path):
+        ChromevolExecutor.compute_expected_ploidy_ages(
+            evolutionary_paths_dir=evolutionary_paths_dir,
+            expected_ploidy_ages_data_path=expected_ploidy_ages_data_path,
+        )  # TO DO: when no polyploidization occured - set age to be the most recent event prior to divergence of family based on carta
         expected_ploidy_ages_data = pd.read_csv(expected_ploidy_ages_data_path)
+        expected_ploidy_ages_data = expected_ploidy_ages_data.loc[expected_ploidy_ages_data.is_polyploidization]
         node_to_age = {}
         for node in ml_tree.get_leaves():
+            leaf = node
             leaf_name = node.name
-            latest_polyploidization_age_data = expected_ploidy_ages_data.query(
-                f"branch_child_name == '{node.name}' and is_polyploidization"
-            )
+            relevant_node_names = [leaf_name]
+            # devise a table of ploidy ages across branches along with their frequency across mappings. take the most
+            # recent event with at least XX support fraction (could be less than 0.75 - as this is the threshold for
+            # any polyplodization along the evolutionary path leading to the leaf) one option is to condition the
+            # fraction by the contribution of the branch length to the total length of the evolutionary path. for
+            # this we would need the ml tree, which we have
+            latest_polyploidization_age_data = expected_ploidy_ages_data.query(f"branch_child_name == '{node.name}'")
             latest_polyploidization_age = (
-                latest_polyploidization_age_data.age.min() if latest_polyploidization_age_data.shape[0] > 0 else np.nan
+                latest_polyploidization_age_data.age.mean() if latest_polyploidization_age_data.shape[0] > 0 else np.nan
             )
-            while not node.up.is_root() and pd.isna(latest_polyploidization_age):
+            while node:
+                relevant_node_names.append(node.name)
                 node = node.up
-                polyploidization_age_data = expected_ploidy_ages_data.query(
-                    f"branch_child_name == '{node.name}' and is_polyploidization"
-                )
-                polyploidization_age = (
-                    polyploidization_age_data.age.min() if polyploidization_age_data.shape[0] > 0 else np.nan
-                )
-                if pd.notna(polyploidization_age):
-                    latest_polyploidization_age = polyploidization_age
+            polyploidization_age_data = expected_ploidy_ages_data.loc[expected_ploidy_ages_data.branch_child_name.isin(relevant_node_names)]
+            if polyploidization_age_data.frequency_across_mappings.sum() < polyploidy_threshold:
+                latest_polyploidization_age = np.nan
+            else:
+                latest_polyploidization_age = polyploidization_age_data.age.min()
             node_to_age[leaf_name] = latest_polyploidization_age
         df = (
             pd.DataFrame.from_dict(node_to_age, orient="index")
             .reset_index()
             .rename(columns={"index": "NODE", 0: "ploidy_age"})
         )
-        # df.ploidy_age = df.ploidy_age.replace({0: np.nan})
         return df
 
     def _get_stochastic_mappings(
@@ -344,6 +347,7 @@ class Pipeline:
         counts_path: str,
         tree_path: str,
         model_parameters_path: str,
+        polyploidy_threshold: float,
         mappings_num: int = 100,
         optimize_model: bool = False,
         output_dir_suffix: Optional[str] = None,
@@ -390,7 +394,9 @@ class Pipeline:
             mappings_num=mappings_num,
         )
 
-        taxon_to_ploidy_age = Pipeline._get_ploidy_age(sm_work_dir=sm_work_dir)
+        taxon_to_ploidy_age = Pipeline._get_ploidy_age(
+            sm_work_dir=sm_work_dir, polyploidy_threshold=polyploidy_threshold
+        )
         taxon_to_polyploidy_support = taxon_to_polyploidy_support.merge(taxon_to_ploidy_age, on="NODE", how="left")
         return taxon_to_polyploidy_support
 
@@ -1210,6 +1216,7 @@ class Pipeline:
         tree_path: str,
         counts_path: str,
         weighted_models_parameters_paths: dict[str, float],
+        polyploidy_threshold: float,
         mappings_num: int = 1000,
         use_model_selection: bool = True,
         optimize_thresholds: bool = False,
@@ -1242,6 +1249,7 @@ class Pipeline:
                     tree_path=tree_path,
                     model_parameters_path=model_path,
                     mappings_num=mappings_num,
+                    polyploidy_threshold=polyploidy_threshold,
                     output_dir_suffix=model_name if not use_model_selection else None,
                 )
                 if optimize_thresholds:
@@ -1352,6 +1360,7 @@ class Pipeline:
         model_path_to_polyploidy_support, model_path_to_simulations_dirs = self._get_model_to_polyploidy_support(
             counts_path=counts_path,
             tree_path=tree_path,
+            polyploidy_threshold=polyploidy_threshold,
             weighted_models_parameters_paths=weighted_models_parameters_paths,
             use_model_selection=use_model_selection,
             optimize_thresholds=optimize_thresholds,
