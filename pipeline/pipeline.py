@@ -329,7 +329,9 @@ class Pipeline:
             while node:
                 relevant_node_names.append(node.name)
                 node = node.up
-            polyploidization_age_data = expected_ploidy_ages_data.loc[expected_ploidy_ages_data.branch_child_name.isin(relevant_node_names)]
+            polyploidization_age_data = expected_ploidy_ages_data.loc[
+                expected_ploidy_ages_data.branch_child_name.isin(relevant_node_names)
+            ]
             if polyploidization_age_data.frequency_across_mappings.sum() < polyploidy_threshold:
                 latest_polyploidization_age = np.nan
             else:
@@ -1351,7 +1353,7 @@ class Pipeline:
         taxa_records = list(SeqIO.parse(counts_path, format="fasta"))
         tree = Tree(tree_path, format=1)
         taxon_name_to_count = {
-            record.description: int(str(record.seq)) if str(record.seq) != "X" else np.nan for record in taxa_records
+            record.description: str(record.seq) if str(record.seq) != "X" else np.nan for record in taxa_records
         }
         ploidy_classification["Taxon"] = pd.Series(tree.get_leaf_names())
         ploidy_classification["Chromosome count"] = ploidy_classification["Taxon"].apply(
