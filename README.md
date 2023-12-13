@@ -40,3 +40,7 @@ To execute the inference scheme on a given dataset, use the exec_ploidb_pipeline
   3. **simulations.zip** - a zip consisting of the simulated datasets, based on the all the different chromevol models, except for the gain_loss model which does not account for polyplodizations.
   4. **ploidy.csv** - a file with the plidy inference data
   5. **classified_tree.nwk, classified_tree.phyloxml** - files of trees with the chromosome numbers and classifications of tip taxa in newick and phyloxml formats, respectively
+
+For additional deatils on the algorithm used for producing PloiDB classifications, please see the manuscript:
+
+Halabi, Keren, Anat Shafir, and Itay Mayrose. "PloiDB: The plant ploidy database." New Phytologist (2023).‏ <https://doi.org/10.1111/nph.19057>
