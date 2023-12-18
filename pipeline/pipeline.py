@@ -1498,6 +1498,8 @@ class Pipeline:
             res = os.system(f"rm -rf {self.work_dir}simulations/")
 
         ploidy_classification["Chromosome count"].fillna("x", inplace=True)
+        if "Taxon" not in ploidy_classification.columns:
+            ploidy_classification.reset_index(inplace=True)
         ploidy_classification["Taxon"].replace({"": np.nan}, inplace=True)
 
         if "frequency_of_successful_mappings" in ploidy_classification:
