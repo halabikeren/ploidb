@@ -1,14 +1,10 @@
 import sys
-
-ONE_TWO_TREE_PATH = "/bioseq/oneTwoTree/"
-ONE_TWO_TREE_INI_PATH = "/groups/itay_mayrose/halabikeren/OneTwoTree.ini"
-# ONE_TWO_TREE_PATH = '/groups/itay_mayrose/michaldrori/PROJECTS/OTT/OTT_V_1p2/'
-DAILY_TESTS_PATH = "/bioseq/bioSequence_scripts_and_constants/daily_tests"
-
 import os
-import csv
-import argparse
 import shutil
+
+ONE_TWO_TREE_PATH = f"{os.getenv('OTT_PATH')}/oneTwoTree/"
+ONE_TWO_TREE_INI_PATH = f"{os.getenv('OTT_PATH')}/oneTwoTree/OneTwoTree_newDB.ini"
+DAILY_TESTS_PATH = f"{os.getenv('OTT_PATH')}/daily_tests"
 
 
 # Create one job file for list of genera:
@@ -20,8 +16,7 @@ def create_job_file(
         handle.write("#PBS -N " + job_name + "\n")
         # handle.write("#PBS -j oe\n")
         handle.write("#PBS -r y\n")
-        # handle.write("#PBS -q itaym\n")
-        handle.write("#PBS -q " + queue + "\n")
+        handle.write(f"#PBS -q {queue}\n")
         handle.write(f"#PBS -l select=1:ncpus=2:mem={mem}gb\n")
         handle.write("#PBS -v PBS_O_SHELL=bash,PBS_ENVIRONMENT=PBS_BATCH\n")
         handle.write("#PBS -e " + output_path + "\n")
@@ -162,9 +157,8 @@ if not os.path.exists(Dir_name):
     os.makedirs(Dir_name)
 f_taxa_list_file = open(OUTPUT_OTT_PATH + "/taxa_list.txt", "w")
 shutil.copyfile(species_list_file, OUTPUT_OTT_PATH + "/taxa_list.txt")
-
-align_script = ONE_TWO_TREE_PATH + "buildTaxaTree.py"  # 'buildTaxaTree_mad.py'
-align_ini = ONE_TWO_TREE_INI_PATH
+align_script = ONE_TWO_TREE_PATH + "buildTaxaTree.py"
+align_ini = ONE_TWO_TREE_PATH + "OneTwoTree_newDB.ini"
 
 cmd = (
     "python "
@@ -230,8 +224,16 @@ else:
     email_end_cmd = ""
 
 job_filename = create_job_file(
-    "-".join(["OTT", JobName]), cmd, email_start_cmd, email_end_cmd, FileNameAndPath, errorFilePath, queue, mem
+    "-".join(["OTT", JobName]),
+    cmd,
+    email_start_cmd,
+    email_end_cmd,
+    FileNameAndPath,
+    errorFilePath,
+    queue=queue,
+    mem=mem,
 )
+print(job_filename)
 os.chdir(OUTPUT_OTT_PATH + "/")
 # log_file_name = OUTPUT_OTT_PATH + 'OTT_log.txt'
 # f_log = open(log_file_name, "w")

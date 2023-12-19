@@ -1,5 +1,5 @@
 runningOptions:phylogeny reconstruction
-inputFile:
+inputFile:{taxa_list_path}
 SpeciesDescendants:No
 Filter_SubSp:on
 Merge_Subsp:off

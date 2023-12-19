@@ -5,8 +5,6 @@ import subprocess
 from dataclasses import dataclass
 from time import sleep
 from typing import Dict
-import pandas as pd
-from Bio import SeqIO
 
 from dotenv import load_dotenv, find_dotenv
 from ete3 import Tree
@@ -68,7 +66,7 @@ class OneTwoTreeExecutor:
             input_template = infile.read()
         input_string = input_template.format(**dataclasses.asdict(one_two_tree_input))
         if use_mad_rooting:
-            input_string.replace("Outgroup_Flag:Single", "Outgroup_Flag:Mad")
+            input_string = input_string.replace("Outgroup_Flag:Single", "Outgroup_Flag:Mad")
         with open(one_two_tree_input.parameters_path, "w") as outfile:
             outfile.write(input_string)
         return one_two_tree_input
