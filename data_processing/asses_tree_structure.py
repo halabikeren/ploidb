@@ -146,11 +146,22 @@ def asses_tree(
         for path in os.listdir(output_dir)
         if path.endswith("_monophyly_status.csv")
     ]
-    print(f"# paths to concat = {len(status_paths)}")
+    anc_paths = [f"{output_dir}{path}" for path in os.listdir(output_dir) if "batch" not in path]
+    print(f"# paths to concat for monophyly status analysis = {len(status_paths)}")
     group_to_monophyly = pd.concat([pd.read_csv(path) for path in status_paths])
     group_to_monophyly.drop_duplicates(inplace=True)
     group_to_monophyly.to_csv(output_path, index=False)
 
+    print(f"# paths to concat for best ancestor to {group_by} = {len(anc_paths)}")
+    anc_dfs = []
+    for path in anc_paths:
+        df = pd.read_csv(path)
+        df["genus"] = os.path.basename(path).split("_")[1]
+        anc_dfs.append(df)
+    anc_df = pd.concat(anc_dfs)
+    anc_df["mrca_score"] = (anc_df.total_members_coverage + anc_df.subtree_members_coverage) / 2
+    anc_df = anc_df.sort_values(["genus", "mrca_score", "num_members"], ascending=[True, False, False])
+    anc_df.to_csv(os.path.dirname(output_path) + f"/{group_by}_to_ancestor", index=False)
 
 if __name__ == "__main__":
     asses_tree()
